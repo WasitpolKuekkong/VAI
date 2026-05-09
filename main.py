@@ -17,6 +17,8 @@ from utils.history import load_history, save_history
 from utils.cleanup import cleanup_old_files
 from utils.logger import logger
 import time
+import threading
+from typing import Optional
 
 
 def build_messages(system_prompt: str, history: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
@@ -51,6 +53,40 @@ def main() -> None:
 	config = load_settings()
 	ensure_output_dirs(config)
 
+	# subtitle file path
+	subtitle_file = Path(__file__).resolve().parent / "subtitle.txt"
+
+	# subtitle timer to auto-clear after delay
+	subtitle_timer: Optional[threading.Timer] = None
+	subtitle_lock = threading.Lock()
+
+	def write_subtitle(text: str) -> None:
+		# write text (overwrite) to subtitle file
+		with subtitle_lock:
+			try:
+				subtitle_file.write_text(text + "\n", encoding="utf-8")
+			except Exception as exc:
+				logger.error(f"Failed to write subtitle: {exc}")
+
+	def clear_subtitle() -> None:
+		with subtitle_lock:
+			try:
+				subtitle_file.write_text("", encoding="utf-8")
+			except Exception as exc:
+				logger.error(f"Failed to clear subtitle: {exc}")
+
+	def schedule_subtitle_clear(delay: float = 5.0) -> None:
+		nonlocal subtitle_timer
+		with subtitle_lock:
+			if subtitle_timer:
+				try:
+					subtitle_timer.cancel()
+				except Exception:
+					pass
+			subtitle_timer = threading.Timer(delay, clear_subtitle)
+			subtitle_timer.daemon = True
+			subtitle_timer.start()
+
 	personality = load_personality(config.personality_path)
 	history = load_history(config.history_file)
 
@@ -67,6 +103,13 @@ def main() -> None:
 
 	while True:
 		user_text = input("You: ").strip()
+		# New input arrives -> cancel any pending subtitle clear and clear immediately
+		if subtitle_timer is not None:
+			try:
+				subtitle_timer.cancel()
+			except Exception:
+				pass
+			clear_subtitle()
 		if not user_text:
 			continue
 		if user_text.lower() in {"exit", "quit"}:
@@ -94,6 +137,8 @@ def main() -> None:
 
 		turn_start = time.perf_counter()
 		try:
+			# Write subtitle: LLM thinking
+			write_subtitle("*** คิดing ***")
 			lm_start = time.perf_counter()
 			messages = build_messages(personality, history, user_text)
 			assistant_text = chat_with_lm_studio(config, messages)
@@ -148,10 +193,17 @@ def main() -> None:
 				# Try to auto-detect VB-Audio
 				device_id = find_vb_audio_device()
 			if device_id is not None or config.audio_output_device is None:
+				# Write subtitle: spoken text
+				write_subtitle(assistant_text)
 				logger.info(f"Playing audio (device_id={device_id})")
-				play_audio(rvc_ready_path, device_id=device_id, blocking=False)
+				play_audio(rvc_ready_path, device_id=device_id, blocking=True)
+				# schedule clear after playback ends
+				schedule_subtitle_clear(5.0)
 			else:
 				logger.warning("Audio playback enabled but no device configured")
+		else:
+			# Not playing audio — still schedule subtitle clear
+			schedule_subtitle_clear(5.0)
 
 		turn_time = time.perf_counter() - turn_start
 		logger.info(f"Turn total time: {turn_time:.3f}s")
