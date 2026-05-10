@@ -1,0 +1,207 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@300;400&family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    width: 720px;
+    height: 300px;
+    background: transparent;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-end;
+    padding-bottom: 16px;
+}
+
+#wrapper {
+    width: 720px;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+#wrapper.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+
+#subtitle-box {
+    background: #000;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-top: none;
+    padding: 12px 28px 14px 28px;
+}
+
+#clip {
+    overflow: hidden;
+    max-height: 214px;
+    position: relative;
+}
+
+#clip::before,
+#clip::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0;
+    height: 30px;
+    z-index: 2;
+    pointer-events: none;
+}
+#clip::before {
+    top: 0;
+    background: linear-gradient(to bottom, #000, transparent);
+}
+#clip::after {
+    bottom: 0;
+    background: linear-gradient(to top, #000, transparent);
+}
+
+#content {
+    font-family: 'Noto Serif Thai', 'Cormorant Garamond', serif;
+    font-size: 23px;
+    font-weight: 300;
+    line-height: 1.7;
+    color: #f5f5f5;
+    letter-spacing: 0.025em;
+    white-space: pre-wrap;
+    word-break: break-word;
+    transform: translateY(0);
+    will-change: transform;
+}
+
+
+</style>
+</head>
+<body>
+
+<div id="wrapper">
+    <div id="top-rule"></div>
+    <div id="subtitle-box">
+        <div id="clip">
+            <div id="content"></div>
+        </div>
+    </div>
+    <div id="bottom-rule"></div>
+</div>
+
+<script>
+const wrapper = document.getElementById("wrapper");
+const clip    = document.getElementById("clip");
+const content = document.getElementById("content");
+
+let currentText = "";
+let clearTimer  = null;
+let rafId       = null;
+let scrollPos   = 0;
+let scrollDir   = 1;
+let lastTs      = null;
+const SPEED     = 28; // px per second
+
+async function typeWords(text) {
+    currentText = text;
+    if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
+    stopScroll();
+
+    content.textContent = "";
+    content.style.transform = "translateY(0)";
+    scrollPos = 0;
+    wrapper.classList.add("visible");
+
+    const words = text.split(/\s+/);
+    let displayed = "";
+    for (let i = 0; i < words.length; i++) {
+        if (currentText !== text) return;
+        displayed += (i === 0 ? "" : " ") + words[i];
+        content.textContent = displayed;
+        await sleep(130);
+    }
+
+    await sleep(700);
+    if (currentText === text) maybeStartScroll();
+}
+
+function maybeStartScroll() {
+    const overflow = content.scrollHeight - clip.clientHeight;
+    if (overflow <= 2) return;
+    scrollDir = 1;
+    lastTs = null;
+    rafId = requestAnimationFrame(tick);
+}
+
+function tick(ts) {
+    if (!lastTs) { lastTs = ts; rafId = requestAnimationFrame(tick); return; }
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+
+    const overflow = content.scrollHeight - clip.clientHeight;
+    if (overflow <= 0) { stopScroll(); return; }
+
+    scrollPos += SPEED * scrollDir * dt;
+
+    if (scrollPos >= overflow) {
+        scrollPos = overflow;
+        scrollDir = -1;
+        applyScroll();
+        stopScroll();
+        setTimeout(() => { if (currentText !== "") { lastTs = null; rafId = requestAnimationFrame(tick); } }, 1400);
+        return;
+    }
+
+    if (scrollPos <= 0) {
+        scrollPos = 0;
+        scrollDir = 1;
+        applyScroll();
+        stopScroll();
+        setTimeout(() => { if (currentText !== "") { lastTs = null; rafId = requestAnimationFrame(tick); } }, 1400);
+        return;
+    }
+
+    applyScroll();
+    rafId = requestAnimationFrame(tick);
+}
+
+function applyScroll() {
+    content.style.transform = `translateY(-${scrollPos}px)`;
+}
+
+function stopScroll() {
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function loadSubtitle() {
+    try {
+        const res  = await fetch("subtitle.txt?ts=" + Date.now());
+        const text = (await res.text()).trim();
+
+        if (!text) {
+            if (currentText !== "") {
+                currentText = "";
+                stopScroll();
+                wrapper.classList.remove("visible");
+                clearTimer = setTimeout(() => {
+                    if (currentText === "") {
+                        content.textContent = "";
+                        content.style.transform = "translateY(0)";
+                        scrollPos = 0;
+                    }
+                }, 500);
+            }
+            return;
+        }
+
+        if (text !== currentText) await typeWords(text);
+    } catch(e) { console.error("Cannot load subtitle.txt", e); }
+}
+
+loadSubtitle();
+setInterval(loadSubtitle, 500);
+</script>
+</body>
+</html>
