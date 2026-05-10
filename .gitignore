@@ -35,6 +35,7 @@ wheels/
 *.swo
 *~
 subtitle.txt
+chat_history.json
 # Output
 tts/output/
 rvc/output/
