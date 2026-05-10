@@ -6,11 +6,16 @@ import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import secrets
+from config.settings import load_settings
 
-CLIENT_ID = "ff4e24b3-ad51-45a0-b4e1-866c4d8e968c"
-CLIENT_SECRET = "9a17c7aa-5a0d-459a-997d-afd1d112be25"
-REDIRECT_URI = "http://localhost:8080/callback"
+config = load_settings()
+CLIENT_ID = config.restream_client_id
+CLIENT_SECRET = config.restream_client_secret
+REDIRECT_URI = config.restream_redirect_uri
 STATE = secrets.token_hex(16)
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    raise RuntimeError("Missing RESTREAM_CLIENT_ID or RESTREAM_CLIENT_SECRET in .env")
 
 access_token = None
 

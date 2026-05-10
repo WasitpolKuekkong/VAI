@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 
 from config.settings import AppConfig, load_personality, load_settings
-from rvc.applio_stub import process_with_rvc
+from rvc.applio_stub import prime_applio_worker, process_with_rvc
 from tts.edge_tts_engine import synthesize_speech
 from tts.edge_tts_engine import SpeakerName
 from tts.audio_player import play_audio, find_vb_audio_device
@@ -52,6 +52,9 @@ def ensure_output_dirs(config: AppConfig) -> None:
 def main() -> None:
 	config = load_settings()
 	ensure_output_dirs(config)
+
+	# Start the Applio worker early so its startup/import cost is paid before the first reply
+	prime_applio_worker(config)
 
 	# subtitle file path
 	subtitle_file = Path(__file__).resolve().parent / "subtitle.txt"

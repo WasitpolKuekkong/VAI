@@ -37,6 +37,9 @@ class AppConfig:
     audio_output_device: int | None
     audio_play_output: bool
     temperature: float
+    restream_client_id: str
+    restream_client_secret: str
+    restream_redirect_uri: str
     max_tokens: int
     max_history_messages: int
     request_timeout: int
@@ -71,6 +74,9 @@ def load_settings() -> AppConfig:
         audio_output_device=int(_get_env("AUDIO_OUTPUT_DEVICE", "-1")) if _get_env("AUDIO_OUTPUT_DEVICE", "-1") != "-1" else None,
         audio_play_output=_get_env("AUDIO_PLAY_OUTPUT", "true").lower() in ("true", "1", "yes"),
         temperature=float(_get_env("LM_STUDIO_TEMPERATURE", "0.7")),
+        restream_client_id=_get_env("RESTREAM_CLIENT_ID", ""),
+        restream_client_secret=_get_env("RESTREAM_CLIENT_SECRET", ""),
+        restream_redirect_uri=_get_env("RESTREAM_REDIRECT_URI", "http://localhost:8080/callback"),
         max_tokens=int(_get_env("LM_STUDIO_MAX_TOKENS", "512")),
         max_history_messages=int(_get_env("LM_STUDIO_HISTORY", "100")),
         request_timeout=int(_get_env("LM_STUDIO_TIMEOUT", "120")),
