@@ -1,0 +1,137 @@
+2026-05-11 16:20:38 INFO 🔗 Connecting to ws://localhost:8001...
+2026-05-11 16:20:40 INFO ✅ Connection successful!
+2026-05-11 16:20:40 INFO 🔑 Requesting a new authentication token...
+2026-05-11 16:20:41 INFO 📥 Token response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491241503,
+  "messageType": "AuthenticationTokenResponse",
+  "requestID": "963a51be267044fda502abef56801acd",
+  "data": {
+    "authenticationToken": "21928a16fc9c1bc00ef1b7f66ca324afa01ba941be0fdc441efaaf30d66f8ec0"
+  }
+}
+2026-05-11 16:20:41 INFO 🔐 Sending authentication request with the new token...
+2026-05-11 16:20:41 INFO 📥 Authentication response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491241538,
+  "messageType": "AuthenticationResponse",
+  "requestID": "ed192c2b9c86447b8f18545df335c419",
+  "data": {
+    "authenticated": true,
+    "reason": "Token valid. The plugin is authenticated for the duration of this session."
+  }
+}
+2026-05-11 16:20:41 INFO ✅ Authentication successful
+2026-05-11 16:20:41 INFO 📥 Hotkeys response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491241553,
+  "messageType": "HotkeysInCurrentModelResponse",
+  "requestID": "97944dc0ef1949c8bf6ee1b2c6ab08d6",
+  "data": {
+    "modelLoaded": true,
+    "modelName": "EiX2Nun",
+    "modelID": "d07dd7c2a93e45e586fb66f289b4ebb6",
+    "availableHotkeys": [
+      {
+        "name": "angry",
+        "type": "ToggleExpression",
+        "description": "Toggles an expression",
+        "file": "angry.exp3.json",
+        "hotkeyID": "2598c30baf024cd0b5537e2573e462a9",
+        "keyCombination": [],
+        "onScreenButtonID": -1
+      },
+      {
+        "name": "brush",
+        "type": "ToggleExpression",
+        "description": "Toggles an expression",
+        "file": "brush.exp3.json",
+        "hotkeyID": "8d1511f8f8374f07a9391828e5970373",
+        "keyCombination": [],
+        "onScreenButtonID": -1
+      },
+      {
+        "name": "sad",
+        "type": "ToggleExpression",
+        "description": "Toggles an expression",
+        "file": "sad.exp3.json",
+        "hotkeyID": "5893b4c6908d4c518ff7d63fedd3c606",
+        "keyCombination": [],
+        "onScreenButtonID": -1
+      },
+      {
+        "name": "smile_happy",
+        "type": "ToggleExpression",
+        "description": "Toggles an expression",
+        "file": "smile_happy.exp3.json",
+        "hotkeyID": "d92861ebe58e4338b38900239a6daed5",
+        "keyCombination": [],
+        "onScreenButtonID": -1
+      },
+      {
+        "name": "smug",
+        "type": "ToggleExpression",
+        "description": "Toggles an expression",
+        "file": "smug.exp3.json",
+        "hotkeyID": "383d7f90700f4cb5a1eab928a8fb8fe9",
+        "keyCombination": [],
+        "onScreenButtonID": -1
+      }
+    ]
+  }
+}
+2026-05-11 16:20:41 INFO ✅ Found 5 hotkeys
+2026-05-11 16:20:41 INFO 🎭 Triggering expression: angry (2598c30baf024cd0b5537e2573e462a9)
+2026-05-11 16:20:41 INFO 📥 Hotkey trigger response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491241571,
+  "messageType": "HotkeyTriggerResponse",
+  "requestID": "b4cb04c84ff549f799abcc9601ee722e",
+  "data": {
+    "hotkeyID": "2598c30baf024cd0b5537e2573e462a9"
+  }
+}
+2026-05-11 16:20:44 INFO 🎭 Triggering expression: brush (8d1511f8f8374f07a9391828e5970373)
+2026-05-11 16:20:44 INFO 📥 Hotkey trigger response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491244655,
+  "messageType": "HotkeyTriggerResponse",
+  "requestID": "b06a7f8485024d129a1d6366ca2756fa",
+  "data": {
+    "hotkeyID": "8d1511f8f8374f07a9391828e5970373"
+  }
+}
+2026-05-11 16:20:47 INFO 🎭 Triggering expression: sad (5893b4c6908d4c518ff7d63fedd3c606)
+2026-05-11 16:20:47 INFO 📥 Hotkey trigger response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491247740,
+  "messageType": "HotkeyTriggerResponse",
+  "requestID": "d8b1435884d4443bb42df6f78fe83678",
+  "data": {
+    "hotkeyID": "5893b4c6908d4c518ff7d63fedd3c606"
+  }
+}
+2026-05-11 16:20:50 INFO 🎭 Triggering expression: smile_happy (d92861ebe58e4338b38900239a6daed5)
+2026-05-11 16:20:50 INFO 📥 Hotkey trigger response:
+{
+  "apiName": "VTubeStudioPublicAPI",
+  "apiVersion": "1.0",
+  "timestamp": 1778491250826,
+  "messageType": "HotkeyTriggerResponse",
+  "requestID": "b013192d7bb84cc8929f7795a74b03d3",
+  "data": {
+    "hotkeyID": "d92861ebe58e4338b38900239a6daed5"
+  }
+}
