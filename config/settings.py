@@ -34,6 +34,8 @@ class AppConfig:
     rvc_embedder_model: str
     rvc_embedder_custom: str
     rvc_f0_method: str
+    rvc_device: str
+    rvc_use_gpu: bool
     audio_output_device: int | None
     audio_play_output: bool
     temperature: float
@@ -86,6 +88,8 @@ def load_settings() -> AppConfig:
         rvc_embedder_model=_get_env("RVC_EMBEDDER_MODEL", "contentvec"),
         rvc_embedder_custom=_get_env("RVC_EMBEDDER_CUSTOM", ""),
         rvc_f0_method=_get_env("RVC_F0_METHOD", "rmvpe"),
+        rvc_device=_get_env("RVC_DEVICE", "cuda"),
+        rvc_use_gpu=_get_env("RVC_USE_GPU", "true").lower() in ("true", "1", "yes"),
         audio_output_device=int(_get_env("AUDIO_OUTPUT_DEVICE", "-1")) if _get_env("AUDIO_OUTPUT_DEVICE", "-1") != "-1" else None,
         audio_play_output=_get_env("AUDIO_PLAY_OUTPUT", "true").lower() in ("true", "1", "yes"),
         temperature=float(_get_env("LM_STUDIO_TEMPERATURE", "0.7")),

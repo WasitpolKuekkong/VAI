@@ -43,7 +43,7 @@ The app reads settings from `.env` in the project root. If a variable is not set
 ### LM Studio
 
 - `LM_STUDIO_BASE_URL` - LM Studio server URL, default `http://127.0.0.1:1234`
-- `LM_STUDIO_MODEL` - model name passed to LM Studio, default `qwen/qwen3-14b`
+- `LM_STUDIO_MODEL` - model name passed to LM Studio, default `qwen/qwen3-4b`
 - `LM_STUDIO_TEMPERATURE` - sampling temperature, default `0.7`
 - `LM_STUDIO_MAX_TOKENS` - max response tokens, default `512`
 - `LM_STUDIO_HISTORY` - number of messages kept in memory, default `100`
