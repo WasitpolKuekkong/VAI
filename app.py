@@ -698,7 +698,7 @@ class AIVTApp:
 			with sr.AudioFile(str(wav_path)) as source:
 				audio_data = recognizer.record(source)
 
-			text = recognizer.recognize_google(audio_data, language=self.config.voice_input_language).strip()
+			text = recognizer.recognize_google(audio_data, language=self.config.voice_input_language).strip()  # type: ignore[attr-defined]
 			self.last_ptt_text = text
 			self.input_box.delete("1.0", END)
 			self.input_box.insert("1.0", text)
@@ -740,7 +740,7 @@ class AIVTApp:
 			audio_data = recognizer.record(source)
 
 		try:
-			return recognizer.recognize_google(audio_data, language=self.config.voice_input_language).strip()
+			return getattr(recognizer, "recognize_google")(audio_data, language=self.config.voice_input_language).strip()
 		except sr.UnknownValueError:
 			return ""
 		except sr.RequestError as exc:
@@ -772,7 +772,7 @@ class AIVTApp:
 					voice=self.config.tts_voice,
 					rate=self.config.tts_rate,
 					volume=self.config.tts_volume,
-					speaker=self.current_speaker,
+					speaker=self.current_speaker,  # type: ignore[arg-type]
 					pitch_semitones=self.current_pitch,
 				)
 			)

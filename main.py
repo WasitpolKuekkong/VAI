@@ -193,9 +193,9 @@ def main() -> None:
 	while True:
 		user_text = input("You: ").strip()
 		# New input arrives -> cancel any pending subtitle clear and clear immediately
-		if subtitle_timer is not None:
+		if _SUBTITLE_TIMER is not None:
 			try:
-				subtitle_timer.cancel()
+				_SUBTITLE_TIMER.cancel()
 			except Exception:
 				pass
 			clear_subtitle()
