@@ -23,7 +23,7 @@ import speech_recognition as sr
 import websockets
 
 from config.settings import BASE_DIR, AppConfig, load_personality, load_settings
-from main import build_messages, chat_with_backend, ensure_output_dirs
+from main import build_messages, chat_with_backend, ensure_output_dirs, write_subtitle, clear_subtitle, schedule_subtitle_clear
 from rvc.applio_stub import prime_applio_worker, process_with_rvc
 from tts.audio_player import find_vb_audio_device, play_audio
 from tts.edge_tts_engine import SpeakerName, synthesize_speech
@@ -755,6 +755,9 @@ class AIVTApp:
 			if not assistant_text:
 				raise RuntimeError("Backend returned empty response")
 
+			# Update subtitle while thinking
+			write_subtitle(f"คิดing...")
+
 			self.history.append({"role": "user", "content": user_text})
 			self.history.append({"role": "assistant", "content": assistant_text})
 			self.history = self.history[-self.config.max_history_messages :]
@@ -777,7 +780,11 @@ class AIVTApp:
 			if self.config.audio_play_output:
 				device_id = self.config.audio_output_device or find_vb_audio_device()
 				if device_id is not None:
+					# Update subtitle with AI response while playing
+					write_subtitle(assistant_text)
 					play_audio(rvc_ready_path, device_id=device_id, blocking=True)
+					# Clear subtitle after playback
+					schedule_subtitle_clear(delay=3.0)
 			cleanup_old_files(self.config.tts_output_dir, max_files=5)
 
 			elapsed = time.perf_counter() - turn_start

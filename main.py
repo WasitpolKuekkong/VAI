@@ -29,6 +29,44 @@ import threading
 from typing import Optional
 
 
+# Subtitle management (module-level for use in app.py and CLI)
+_SUBTITLE_FILE = Path(__file__).resolve().parent / "subtitle.txt"
+_SUBTITLE_LOCK = threading.Lock()
+_SUBTITLE_TIMER: Optional[threading.Timer] = None
+
+
+def write_subtitle(text: str) -> None:
+	"""Write text to subtitle.txt for streaming/display."""
+	with _SUBTITLE_LOCK:
+		try:
+			_SUBTITLE_FILE.write_text(text + "\n", encoding="utf-8")
+		except Exception as exc:
+			logger.error(f"Failed to write subtitle: {exc}")
+
+
+def clear_subtitle() -> None:
+	"""Clear subtitle.txt."""
+	with _SUBTITLE_LOCK:
+		try:
+			_SUBTITLE_FILE.write_text("", encoding="utf-8")
+		except Exception as exc:
+			logger.error(f"Failed to clear subtitle: {exc}")
+
+
+def schedule_subtitle_clear(delay: float = 5.0) -> None:
+	"""Schedule subtitle auto-clear after delay (in seconds)."""
+	global _SUBTITLE_TIMER
+	with _SUBTITLE_LOCK:
+		if _SUBTITLE_TIMER:
+			try:
+				_SUBTITLE_TIMER.cancel()
+			except Exception:
+				pass
+		_SUBTITLE_TIMER = threading.Timer(delay, clear_subtitle)
+		_SUBTITLE_TIMER.daemon = True
+		_SUBTITLE_TIMER.start()
+
+
 def build_messages(system_prompt: str, history: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
 	messages = [{"role": "system", "content": system_prompt}]
 	messages.extend(history)
@@ -132,39 +170,8 @@ def main() -> None:
 	except Exception as e:
 		logger.warning(f"Failed to initialize VTuber controller at startup: {e}")
 
-	# subtitle file path
-	subtitle_file = Path(__file__).resolve().parent / "subtitle.txt"
-
-	# subtitle timer to auto-clear after delay
-	subtitle_timer: Optional[threading.Timer] = None
-	subtitle_lock = threading.Lock()
-
-	def write_subtitle(text: str) -> None:
-		# write text (overwrite) to subtitle file
-		with subtitle_lock:
-			try:
-				subtitle_file.write_text(text + "\n", encoding="utf-8")
-			except Exception as exc:
-				logger.error(f"Failed to write subtitle: {exc}")
-
-	def clear_subtitle() -> None:
-		with subtitle_lock:
-			try:
-				subtitle_file.write_text("", encoding="utf-8")
-			except Exception as exc:
-				logger.error(f"Failed to clear subtitle: {exc}")
-
-	def schedule_subtitle_clear(delay: float = 5.0) -> None:
-		nonlocal subtitle_timer
-		with subtitle_lock:
-			if subtitle_timer:
-				try:
-					subtitle_timer.cancel()
-				except Exception:
-					pass
-			subtitle_timer = threading.Timer(delay, clear_subtitle)
-			subtitle_timer.daemon = True
-			subtitle_timer.start()
+	# subtitle timer to auto-clear after delay (for CLI)
+	# Use module-level functions: write_subtitle, clear_subtitle, schedule_subtitle_clear
 
 	personality = load_personality(config.personality_path)
 	history = load_history(config.history_file)
