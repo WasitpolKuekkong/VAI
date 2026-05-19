@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import secrets
 import tempfile
 import threading
@@ -23,13 +24,14 @@ import speech_recognition as sr
 import websockets
 
 from config.settings import BASE_DIR, AppConfig, load_personality, load_settings
-from main import build_messages, chat_with_backend, ensure_output_dirs, write_subtitle, clear_subtitle, schedule_subtitle_clear
+from main import build_messages, chat_with_backend, chat_with_backend_and_expression, ensure_output_dirs, write_subtitle, clear_subtitle, schedule_subtitle_clear, schedule_expression_clear
 from rvc.applio_stub import prime_applio_worker, process_with_rvc
 from tts.audio_player import find_vb_audio_device, play_audio
 from tts.edge_tts_engine import SpeakerName, synthesize_speech
 from utils.cleanup import cleanup_old_files
 from utils.history import load_history, save_history
 from utils.logger import logger
+from utils.vtuber_controller import trigger_expression, clear_expression, get_vtuber_controller, _run_in_loop
 
 
 class TkLogHandler(logging.Handler):
@@ -102,11 +104,19 @@ class AIVTApp:
 		self.backend_var = StringVar(value=self.config.preferred_backend)
 		self.gemini_model_var = StringVar(value=self.config.google_aistudio_model)
 		self.lm_model_var = StringVar(value=self.config.model_name)
-		self.voice_input_enabled_var = BooleanVar(value=True)
-		self.chat_input_enabled_var = BooleanVar(value=True)
-		self.auto_send_chat_var = BooleanVar(value=False)
-		self.auto_send_ptt_var = BooleanVar(value=False)
-		self.voice_mode_var = StringVar(value="voice_activation")
+		
+		# Load UI preferences from environment
+		voice_input_enabled = os.getenv("VOICE_INPUT_ENABLED", "1").lower() in ("1", "true", "yes")
+		chat_input_enabled = os.getenv("CHAT_INPUT_ENABLED", "1").lower() in ("1", "true", "yes")
+		auto_send_chat = os.getenv("AUTO_SEND_CHAT", "0").lower() in ("1", "true", "yes")
+		auto_send_ptt = os.getenv("AUTO_SEND_PTT", "0").lower() in ("1", "true", "yes")
+		voice_mode = os.getenv("VOICE_MODE", "voice_activation")
+		
+		self.voice_input_enabled_var = BooleanVar(value=voice_input_enabled)
+		self.chat_input_enabled_var = BooleanVar(value=chat_input_enabled)
+		self.auto_send_chat_var = BooleanVar(value=auto_send_chat)
+		self.auto_send_ptt_var = BooleanVar(value=auto_send_ptt)
+		self.voice_mode_var = StringVar(value=voice_mode)
 		self.voice_device_options = self._build_voice_device_options()
 		self.voice_device_var = StringVar(value=self._initial_voice_device_label())
 		self.rvc_pth_var = StringVar(value=str(self.config.rvc_model_pth))
@@ -154,106 +164,128 @@ class AIVTApp:
 	def _build_ui(self) -> None:
 		self.root.configure(bg="#10131a")
 
-		top = Frame(self.root, bg="#10131a")
-		top.pack(fill=X, padx=16, pady=(16, 8))
+		# ============ TOP BAR ============
+		top = Frame(self.root, bg="#151a24", height=80)
+		top.pack(fill=X, padx=0, pady=0)
+		top.pack_propagate(False)
 
-		Label(top, text="AIVT Desktop", fg="#f2f4f8", bg="#10131a", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-		Label(top, text="Chat + Gemini/LM Studio + RVC", fg="#9ca3af", bg="#10131a", font=("Segoe UI", 10)).pack(anchor="w", pady=(2, 0))
+		top_left = Frame(top, bg="#151a24")
+		top_left.pack(side=LEFT, fill=BOTH, expand=True, padx=16, pady=12)
+		
+		Label(top_left, text="🎤 AIVT", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 18, "bold")).pack(anchor="w")
+		Label(top_left, text="Voice • AI • VTuber Studio", fg="#9ca3af", bg="#151a24", font=("Segoe UI", 9)).pack(anchor="w")
 
-		body = Frame(self.root, bg="#10131a")
-		body.pack(fill=BOTH, expand=True, padx=16, pady=8)
+		top_right = Frame(top, bg="#151a24")
+		top_right.pack(side=RIGHT, padx=16, pady=12)
+		
+		Button(top_right, text="🔗 Restream", command=self.connect_restream, bg="#0d9488", fg="white", relief="flat", padx=12, pady=8, font=("Segoe UI", 10, "bold")).pack(side=LEFT, padx=(0, 8))
+		Button(top_right, text="🎭 VTube", command=self._connect_vtuber_studio, bg="#7c3aed", fg="white", relief="flat", padx=12, pady=8, font=("Segoe UI", 10, "bold")).pack(side=LEFT)
 
-		left = Frame(body, bg="#10131a")
-		left.pack(side=LEFT, fill=BOTH, expand=True)
+		# ============ MAIN CONTENT ============
+		main = Frame(self.root, bg="#10131a")
+		main.pack(fill=BOTH, expand=True, padx=12, pady=12)
 
-		input_panel = Frame(left, bg="#151a24", padx=14, pady=12)
-		input_panel.pack(fill=X, pady=(0, 10))
-		Label(input_panel, text="Main Input", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 13, "bold")).pack(anchor="w")
+		# === INPUT SECTION ===
+		input_section = Frame(main, bg="#151a24", relief="flat", highlightthickness=0)
+		input_section.pack(fill=X, pady=(0, 10))
 
-		source_row = Frame(input_panel, bg="#151a24")
-		source_row.pack(fill=X, pady=(0, 8))
-		ttk.Checkbutton(source_row, text="voice input", variable=self.voice_input_enabled_var).pack(side=LEFT)
-		ttk.Checkbutton(source_row, text="chat input", variable=self.chat_input_enabled_var).pack(side=LEFT, padx=(14, 0))
-		ttk.Checkbutton(source_row, text="Auto-send chat", variable=self.auto_send_chat_var).pack(side=LEFT, padx=(8, 0))
+		input_title = Frame(input_section, bg="#151a24")
+		input_title.pack(fill=X, padx=14, pady=(12, 8))
+		Label(input_title, text="📝 Input Controls", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 12, "bold")).pack(anchor="w", side=LEFT)
+
+		# Controls row
+		ctrl_row = Frame(input_section, bg="#151a24")
+		ctrl_row.pack(fill=X, padx=14, pady=(0, 12))
+		
+		ttk.Checkbutton(ctrl_row, text="Voice", variable=self.voice_input_enabled_var).pack(side=LEFT, padx=(0, 10))
+		ttk.Checkbutton(ctrl_row, text="Chat", variable=self.chat_input_enabled_var).pack(side=LEFT, padx=(0, 10))
+		ttk.Checkbutton(ctrl_row, text="Auto-send", variable=self.auto_send_chat_var).pack(side=LEFT, padx=(0, 10))
+		
 		ttk.Combobox(
-			source_row,
+			ctrl_row,
 			textvariable=self.voice_mode_var,
-			values=("voice_activation", "push_to_talk (P)"),
+			values=("voice_activation", "push_to_talk"),
 			state="readonly",
-			width=18,
-		).pack(side=LEFT, padx=(14, 0))
-		Button(source_row, text="Connect Restream", command=self.connect_restream, bg="#334155", fg="white", relief="flat", padx=10, pady=4).pack(side=LEFT, padx=(14, 0))
-		Label(
-			source_row,
-			text="Priority: input > voice input > chat input",
-			fg="#9ca3af",
-			bg="#151a24",
-		).pack(side=RIGHT)
-		self.input_box = Text(input_panel, height=4, wrap="word", bg="#0b0f16", fg="#e5e7eb", insertbackground="#e5e7eb", font=("Segoe UI", 10), relief="flat")
-		self.input_box.pack(fill=X, pady=(0, 8))
+			width=15,
+		).pack(side=LEFT, padx=(0, 10))
+
+		# Input box
+		self.input_box = Text(input_section, height=3, wrap="word", bg="#0b0f16", fg="#e5e7eb", insertbackground="#e5e7eb", font=("Segoe UI", 10), relief="flat", padx=10, pady=8)
+		self.input_box.pack(fill=X, padx=14, pady=(0, 12))
 		self.input_box.bind("<Control-Return>", lambda _: self.send_message())
 
-		input_actions = Frame(input_panel, bg="#151a24")
-		input_actions.pack(fill=X)
-		Button(input_actions, text="Send", command=self.send_message, bg="#2b6cb0", fg="white", relief="flat", padx=18, pady=8).pack(side=LEFT)
-		Button(input_actions, text="Clear", command=self._clear_input, bg="#374151", fg="white", relief="flat", padx=18, pady=8).pack(side=LEFT, padx=(8, 0))
-		Label(input_actions, textvariable=self.status_var, fg="#cbd5e1", bg="#151a24", wraplength=520, justify="left").pack(side=LEFT, padx=(14, 0))
+		# Action buttons
+		action_row = Frame(input_section, bg="#151a24")
+		action_row.pack(fill=X, padx=14, pady=(0, 14))
+		Button(action_row, text="Send", command=self.send_message, bg="#2b6cb0", fg="white", relief="flat", padx=16, pady=6, font=("Segoe UI", 10, "bold")).pack(side=LEFT, padx=(0, 8))
+		Button(action_row, text="Clear", command=self._clear_input, bg="#374151", fg="white", relief="flat", padx=16, pady=6).pack(side=LEFT, padx=(0, 8))
+		Label(action_row, textvariable=self.status_var, fg="#cbd5e1", bg="#151a24", wraplength=400, justify="left", font=("Segoe UI", 9)).pack(side=LEFT, padx=(8, 0))
 
-		chat_panel = Frame(left, bg="#151a24", padx=14, pady=12)
-		chat_panel.pack(fill=BOTH, expand=True, pady=(0, 10))
-		Label(chat_panel, text="Chat", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-		self.chat_view = ScrolledText(chat_panel, wrap="word", height=18, bg="#0b0f16", fg="#e5e7eb", insertbackground="#e5e7eb", font=("Segoe UI", 10), relief="flat")
-		self.chat_view.pack(fill=BOTH, expand=True, pady=(8, 0))
+		# === CONTENT AREA (Split) ===
+		content = Frame(main, bg="#10131a")
+		content.pack(fill=BOTH, expand=True)
+
+		# Chat panel
+		chat_panel = Frame(content, bg="#151a24", relief="flat", highlightthickness=0)
+		chat_panel.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 8))
+
+		Label(chat_panel, text="💬 Chat", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=14, pady=(12, 8))
+		self.chat_view = ScrolledText(chat_panel, wrap="word", height=15, bg="#0b0f16", fg="#e5e7eb", insertbackground="#e5e7eb", font=("Segoe UI", 10), relief="flat")
+		self.chat_view.pack(fill=BOTH, expand=True, padx=14, pady=(0, 12))
 		self.chat_view.configure(state="disabled")
 
-		voice_panel = Frame(left, bg="#151a24", padx=14, pady=12)
-		voice_panel.pack(fill=X)
-		Label(voice_panel, text="Voice", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-		voice_device_row = Frame(voice_panel, bg="#151a24")
-		voice_device_row.pack(fill=X, pady=(8, 0))
-		Label(voice_device_row, text="Microphone", fg="#d1d5db", bg="#151a24").pack(anchor="w")
+		# Right sidebar
+		sidebar = Frame(content, bg="#10131a", width=280)
+		sidebar.pack(side=RIGHT, fill=BOTH, padx=0)
+		sidebar.pack_propagate(False)
+
+		# Voice status
+		voice_panel = Frame(sidebar, bg="#151a24", relief="flat", highlightthickness=0)
+		voice_panel.pack(fill=X, pady=(0, 10))
+
+		Label(voice_panel, text="🎙️ Voice", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10, 8))
+		
+		device_label = Frame(voice_panel, bg="#151a24")
+		device_label.pack(fill=X, padx=12, pady=(0, 4))
+		Label(device_label, text="Microphone", fg="#d1d5db", bg="#151a24", font=("Segoe UI", 9)).pack(anchor="w")
+		
 		ttk.Combobox(
-			voice_device_row,
+			voice_panel,
 			textvariable=self.voice_device_var,
 			values=self.voice_device_options,
 			state="readonly",
-		).pack(fill=X, pady=(4, 0))
+			width=28,
+		).pack(fill=X, padx=12, pady=(0, 10))
+		
 		self.voice_device_var.trace_add("write", lambda *_: self._on_voice_device_changed())
-		level_row = Frame(voice_panel, bg="#151a24")
-		level_row.pack(fill=X, pady=(10, 0))
-		Label(level_row, textvariable=self.voice_level_var, fg="#9ca3af", bg="#151a24").pack(anchor="w")
-		self.voice_level_bar = ttk.Progressbar(level_row, orient="horizontal", mode="determinate", maximum=100)
-		self.voice_level_bar.pack(fill=X, pady=(4, 0))
-		Label(voice_panel, textvariable=self.restream_status_var, fg="#9ca3af", bg="#151a24").pack(anchor="w", pady=(6, 0))
-		Label(voice_panel, text="Hold P for push-to-talk when voice mode is set to push_to_talk", fg="#9ca3af", bg="#151a24").pack(anchor="w", pady=(4, 0))
 
-		right = Frame(body, bg="#10131a")
-		right.pack(side=RIGHT, fill=Y, padx=(12, 0))
+		Label(voice_panel, textvariable=self.voice_level_var, fg="#9ca3af", bg="#151a24", font=("Segoe UI", 8)).pack(anchor="w", padx=12)
+		self.voice_level_bar = ttk.Progressbar(voice_panel, orient="horizontal", mode="determinate", maximum=100, length=250)
+		self.voice_level_bar.pack(fill=X, padx=12, pady=(4, 10))
 
-		log_panel = Frame(right, bg="#151a24", padx=14, pady=12)
-		log_panel.pack(fill=BOTH, expand=True, pady=(0, 10))
-		Label(log_panel, text="Log", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-		self.log_view = ScrolledText(log_panel, wrap="word", width=42, bg="#0b0f16", fg="#93c5fd", insertbackground="#e5e7eb", font=("Consolas", 9), relief="flat")
-		self.log_view.pack(fill=BOTH, expand=True, pady=(8, 0))
+		Label(voice_panel, textvariable=self.restream_status_var, fg="#10b981", bg="#151a24", font=("Segoe UI", 8), wraplength=250).pack(anchor="w", padx=12, pady=(0, 10))
+
+		# Settings mini panel
+		settings_panel = Frame(sidebar, bg="#151a24", relief="flat", highlightthickness=0)
+		settings_panel.pack(fill=X, pady=(0, 10))
+
+		Label(settings_panel, text="⚙️ Settings", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10, 8))
+
+		backend_row = Frame(settings_panel, bg="#151a24")
+		backend_row.pack(fill=X, padx=12, pady=(0, 8))
+		Label(backend_row, text="Backend", fg="#d1d5db", bg="#151a24", font=("Segoe UI", 9), width=10).pack(side=LEFT, anchor="w")
+		ttk.Combobox(backend_row, textvariable=self.backend_var, values=("gemini", "lmstudio"), state="readonly", width=12).pack(side=LEFT, padx=(0, 0))
+
+		Button(settings_panel, text="Advanced Settings", command=self._show_advanced_settings, bg="#4b5563", fg="white", relief="flat", padx=10, pady=6, font=("Segoe UI", 9)).pack(fill=X, padx=12, pady=(0, 10))
+
+		# Log panel
+		log_panel = Frame(sidebar, bg="#151a24", relief="flat", highlightthickness=0)
+		log_panel.pack(fill=BOTH, expand=True)
+
+		Label(log_panel, text="📋 Log", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=12, pady=(10, 8))
+		self.log_view = ScrolledText(log_panel, wrap="word", bg="#0b0f16", fg="#93c5fd", insertbackground="#e5e7eb", font=("Consolas", 8), relief="flat")
+		self.log_view.pack(fill=BOTH, expand=True, padx=12, pady=(0, 12))
 		self.log_view.configure(state="disabled")
-
-		settings = Frame(right, bg="#151a24", padx=14, pady=14)
-		settings.pack(fill=X)
-
-		Label(settings, text="Settings", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-
-		self._field(settings, "Backend", ttk.Combobox, self.backend_var, values=("gemini", "lmstudio"), state="readonly")
-		self._field(settings, "Gemini model", Entry, self.gemini_model_var)
-		self._field(settings, "LM Studio model", ttk.Combobox, self.lm_model_var, values=self.lm_model_options)
-		self._path_field(settings, "RVC model .pth", self.rvc_pth_var)
-		self._path_field(settings, "RVC index", self.rvc_index_var)
-		self._path_field(settings, "Applio path", self.applio_path_var)
-
-		Button(settings, text="Apply & Save", command=self.apply_settings, bg="#16a34a", fg="white", relief="flat", padx=14, pady=8).pack(fill=X, pady=(12, 6))
-		Button(settings, text="Refresh history", command=self._reload_history, bg="#4b5563", fg="white", relief="flat", padx=14, pady=8).pack(fill=X)
-
-		shortcut = Label(settings, text="Ctrl+Enter = Send", fg="#6b7280", bg="#151a24")
-		shortcut.pack(anchor="w", pady=(8, 0))
 
 	def _field(self, parent: Frame, label: str, widget_cls, variable: StringVar, **kwargs) -> None:
 		wrapper = Frame(parent, bg="#151a24")
@@ -275,6 +307,55 @@ class AIVTApp:
 		path = filedialog.askopenfilename(title="Choose file")
 		if path:
 			variable.set(path)
+
+	def _show_advanced_settings(self) -> None:
+		"""Show advanced settings in a new window."""
+		settings_window = Tk()
+		settings_window.title("Advanced Settings")
+		settings_window.geometry("500x600")
+		settings_window.configure(bg="#10131a")
+		
+		canvas = Frame(settings_window, bg="#151a24")
+		canvas.pack(fill=BOTH, expand=True, padx=16, pady=16)
+		
+		Label(canvas, text="Backend Settings", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 10))
+		
+		self._field(canvas, "Gemini model", Entry, self.gemini_model_var)
+		self._field(canvas, "LM Studio model", ttk.Combobox, self.lm_model_var, values=self.lm_model_options, state="readonly")
+		
+		Label(canvas, text="RVC/Voice Settings", fg="#f2f4f8", bg="#151a24", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(16, 10))
+		
+		self._path_field(canvas, "RVC model .pth", self.rvc_pth_var)
+		self._path_field(canvas, "RVC index", self.rvc_index_var)
+		self._path_field(canvas, "Applio path", self.applio_path_var)
+		
+		btn_row = Frame(canvas, bg="#151a24")
+		btn_row.pack(fill=X, pady=(20, 0))
+		Button(btn_row, text="Save", command=lambda: self._save_advanced_settings(settings_window), bg="#16a34a", fg="white", relief="flat", padx=16, pady=8).pack(side=LEFT, padx=(0, 8))
+		Button(btn_row, text="Reload History", command=self._reload_history, bg="#4b5563", fg="white", relief="flat", padx=16, pady=8).pack(side=LEFT)
+	
+	def _save_advanced_settings(self, window: Tk) -> None:
+		"""Save advanced settings and close the window."""
+		self.apply_settings()
+		self.status_var.set("✅ Advanced settings saved!")
+		window.destroy()
+	
+	def _connect_vtuber_studio(self) -> None:
+		"""Connect to VTuber Studio."""
+		if not self.config.vtuber_studio_enabled:
+			self.status_var.set("⚠️ VTuber Studio is not enabled in config")
+			return
+		
+		self.status_var.set("🔗 Connecting to VTuber Studio...")
+		try:
+			from utils.vtuber_controller import initialize_vtuber_controller
+			ctrl = _run_in_loop(initialize_vtuber_controller())
+			if ctrl:
+				self.status_var.set("✅ VTuber Studio connected!")
+			else:
+				self.status_var.set("❌ Failed to connect to VTuber Studio")
+		except Exception as e:
+			self.status_var.set(f"❌ VTuber Studio error: {e}")
 
 	def _clear_input(self) -> None:
 		self.input_box.delete("1.0", END)
@@ -332,8 +413,11 @@ class AIVTApp:
 		_write_env_value("EDGE_APPLIO_PATH", str(self.config.applio_path))
 		_write_env_value("AUTO_SEND_CHAT", "1" if self.auto_send_chat_var.get() else "0")
 		_write_env_value("AUTO_SEND_PTT", "1" if self.auto_send_ptt_var.get() else "0")
+		_write_env_value("VOICE_INPUT_ENABLED", "1" if self.voice_input_enabled_var.get() else "0")
+		_write_env_value("CHAT_INPUT_ENABLED", "1" if self.chat_input_enabled_var.get() else "0")
+		_write_env_value("VOICE_MODE", self.voice_mode_var.get().strip() or "voice_activation")
 
-		self.status_var.set(f"Saved settings. Backend={self.config.preferred_backend.upper()} | Gemini={self.config.google_aistudio_model}")
+		self.status_var.set(f"✅ Saved! Backend={self.config.preferred_backend.upper()} | Model={self.config.google_aistudio_model}")
 
 	def send_message(self) -> None:
 		if self.busy:
@@ -751,7 +835,8 @@ class AIVTApp:
 		try:
 			turn_start = time.perf_counter()
 			messages = build_messages(self.personality, self.history, user_text)
-			assistant_text = chat_with_backend(self.config, messages)
+			# Get response with expression
+			assistant_text, expression = chat_with_backend_and_expression(self.config, messages)
 			if not assistant_text:
 				raise RuntimeError("Backend returned empty response")
 
@@ -782,7 +867,20 @@ class AIVTApp:
 				if device_id is not None:
 					# Update subtitle with AI response while playing
 					write_subtitle(assistant_text)
+					
+					# Trigger expression (from LLM function call or sentiment analysis)
+					vtuber_ctrl = get_vtuber_controller()
+					if vtuber_ctrl and expression:
+						trigger_expression(expression, controller=vtuber_ctrl)
+					elif vtuber_ctrl:
+						# Fallback if no expression from LLM
+						trigger_expression("smile_happy", controller=vtuber_ctrl)
+					
+					# Play audio
 					play_audio(rvc_ready_path, device_id=device_id, blocking=True)
+					
+					# Schedule expression clear after 2 seconds
+					schedule_expression_clear(delay=2.0)
 					# Clear subtitle after playback
 					schedule_subtitle_clear(delay=3.0)
 			cleanup_old_files(self.config.tts_output_dir, max_files=5)

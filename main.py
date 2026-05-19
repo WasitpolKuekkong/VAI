@@ -19,6 +19,8 @@ from utils.vtuber_controller import (
 	_run_in_loop,
 	list_hotkeys,
 	get_vtuber_controller,
+	trigger_expression,
+	clear_expression,
 )
 from typing import cast
 from utils.history import load_history, save_history
@@ -33,6 +35,10 @@ from typing import Optional
 _SUBTITLE_FILE = Path(__file__).resolve().parent / "subtitle.txt"
 _SUBTITLE_LOCK = threading.Lock()
 _SUBTITLE_TIMER: Optional[threading.Timer] = None
+
+# Expression management (module-level)
+_EXPRESSION_TIMER: Optional[threading.Timer] = None
+_EXPRESSION_LOCK = threading.Lock()
 
 
 def write_subtitle(text: str) -> None:
@@ -67,6 +73,22 @@ def schedule_subtitle_clear(delay: float = 5.0) -> None:
 		_SUBTITLE_TIMER.start()
 
 
+def schedule_expression_clear(delay: float = 2.0) -> None:
+	"""Schedule VTuber expression auto-clear after delay (in seconds)."""
+	global _EXPRESSION_TIMER
+	with _EXPRESSION_LOCK:
+		if _EXPRESSION_TIMER:
+			try:
+				_EXPRESSION_TIMER.cancel()
+			except Exception:
+				pass
+		controller = get_vtuber_controller()
+		if controller:
+			_EXPRESSION_TIMER = threading.Timer(delay, lambda: clear_expression(controller=controller))
+			_EXPRESSION_TIMER.daemon = True
+			_EXPRESSION_TIMER.start()
+
+
 def build_messages(system_prompt: str, history: list[dict[str, str]], user_text: str) -> list[dict[str, str]]:
 	messages = [{"role": "system", "content": system_prompt}]
 	messages.extend(history)
@@ -90,12 +112,17 @@ def chat_with_lm_studio(config: AppConfig, messages: list[dict[str, str]]) -> st
 	return data["choices"][0]["message"]["content"].strip()
 
 
-def chat_with_google_gemini(config: AppConfig, messages: list[dict[str, str]]) -> str:
-	"""Send messages to Google Gemini using the current SDK."""
+def chat_with_google_gemini(config: AppConfig, messages: list[dict[str, str]]) -> tuple[str, str | None]:
+	"""Send messages to Google Gemini and analyze for expression.
+	
+	Returns: (response_text, expression_name)
+	"""
 	if not config.google_aistudio_api_key:
 		raise RuntimeError("GOOGLE_AISTUDIO_API_KEY is not set")
 
 	client = genai.Client(api_key=config.google_aistudio_api_key)
+	
+	# Build message parts for compatibility
 	prompt_parts: list[str] = []
 	for message in messages:
 		role = message.get("role", "user")
@@ -117,11 +144,20 @@ def chat_with_google_gemini(config: AppConfig, messages: list[dict[str, str]]) -
 
 	for attempt in range(1, max_attempts + 1):
 		try:
+			# Simple API call - no function calling needed
 			response = client.models.generate_content(
 				model=model,
 				contents=prompt,
 			)
-			return (response.text or "").strip()
+			
+			# Extract text response
+			response_text = (response.text or "").strip()
+			
+			# Analyze response for expression (fallback sentiment analysis)
+			expression = _analyze_sentiment_for_expression(response_text)
+			
+			return response_text, expression
+			
 		except Exception as exc:
 			message = str(exc)
 			is_rate_limited = "429" in message or "RESOURCE_EXHAUSTED" in message
@@ -134,17 +170,54 @@ def chat_with_google_gemini(config: AppConfig, messages: list[dict[str, str]]) -
 				continue
 			raise
 
-	return ""
+	return "", None
+
+
+def _analyze_sentiment_for_expression(text: str) -> str | None:
+	"""Fallback: Analyze sentiment from text to choose expression."""
+	text_lower = text.lower()
+	
+	# Count sentiment keywords
+	angry_words = sum(1 for word in ["โกรธ", "แย่", "ไม่ดี", "หัวเสีย", "ตรวจสอบ", "ปัญหา"] if word in text_lower)
+	happy_words = sum(1 for word in ["ดี", "ยิ้ม", "มีความสุข", "เยี่ยม", "ยอ", "ดีใจ"] if word in text_lower)
+	sad_words = sum(1 for word in ["เศร้า", "ทุกข์", "เสียใจ", "ผิดหวัง", "น่าเสียดาย"] if word in text_lower)
+	
+	# Choose based on highest count
+	if angry_words > 0 and angry_words >= happy_words and angry_words >= sad_words:
+		return "angry"
+	elif sad_words > 0 and sad_words >= happy_words:
+		return "sad"
+	elif happy_words > 0:
+		return "smile_happy"
+	
+	return None
 
 
 def chat_with_backend(config: AppConfig, messages: list[dict[str, str]]) -> str:
-	"""Wrapper to call the appropriate backend based on config."""
+	"""Wrapper to call the appropriate backend based on config (text only, backward compatible)."""
+	backend = config.preferred_backend.lower()
+	
+	if backend == "gemini":
+		response_text, _ = chat_with_google_gemini(config, messages)
+		return response_text
+	elif backend == "lmstudio":
+		return chat_with_lm_studio(config, messages)
+	else:
+		raise ValueError(f"Unknown backend: {backend}. Use 'gemini' or 'lmstudio'")
+
+
+def chat_with_backend_and_expression(config: AppConfig, messages: list[dict[str, str]]) -> tuple[str, str | None]:
+	"""Call backend and return (response_text, expression_name).
+	
+	Only Gemini returns expression, LM Studio returns (text, None).
+	"""
 	backend = config.preferred_backend.lower()
 	
 	if backend == "gemini":
 		return chat_with_google_gemini(config, messages)
 	elif backend == "lmstudio":
-		return chat_with_lm_studio(config, messages)
+		text = chat_with_lm_studio(config, messages)
+		return text, None
 	else:
 		raise ValueError(f"Unknown backend: {backend}. Use 'gemini' or 'lmstudio'")
 
@@ -262,7 +335,8 @@ def main() -> None:
 			write_subtitle("*** คิดing ***")
 			lm_start = time.perf_counter()
 			messages = build_messages(personality, history, user_text)
-			assistant_text = chat_with_backend(config, messages)
+			# Get response with expression
+			assistant_text, expression = chat_with_backend_and_expression(config, messages)
 			lm_time = time.perf_counter() - lm_start
 			backend_name = config.preferred_backend.upper()
 			logger.info(f"{backend_name} response time: {lm_time:.3f}s")
@@ -319,15 +393,28 @@ def main() -> None:
 			if device_id is None:
 				# Try to auto-detect VB-Audio
 				device_id = find_vb_audio_device()
-			if device_id is not None or config.audio_output_device is None:
+			if device_id is not None:
 				# Write subtitle: spoken text
 				write_subtitle(assistant_text)
 				logger.info(f"Playing audio (device_id={device_id})")
+				
+				# Trigger expression (from LLM function call or sentiment analysis)
+				vtuber_ctrl = get_vtuber_controller()
+				if vtuber_ctrl and expression:
+					trigger_expression(expression, controller=vtuber_ctrl)
+				elif vtuber_ctrl:
+					# Fallback if no expression from LLM
+					trigger_expression("smile_happy", controller=vtuber_ctrl)
+				
+				# Play audio
 				play_audio(rvc_ready_path, device_id=device_id, blocking=True)
+				
+				# Schedule expression clear after 2 seconds
+				schedule_expression_clear(delay=2.0)
 				# schedule clear after playback ends
 				schedule_subtitle_clear(5.0)
 			else:
-				logger.warning("Audio playback enabled but no device configured")
+				logger.warning("Audio playback enabled but no device found (set AUDIO_OUTPUT_DEVICE in .env)")
 		else:
 			# Not playing audio — still schedule subtitle clear
 			schedule_subtitle_clear(5.0)

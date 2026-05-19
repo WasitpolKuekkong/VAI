@@ -9,6 +9,7 @@ import asyncio
 import json
 import uuid
 import re
+import time
 from typing import Any
 from pathlib import Path
 import sys
@@ -44,17 +45,26 @@ async def _send_request(
     message_type: str,
     data: dict[str, Any] | None = None,
     request_id: str | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     request_id = request_id or uuid.uuid4().hex
+    request_data = data or {}
+    
+    # Include auth token if provided
+    if auth_token:
+        request_data = {**request_data, "authenticationToken": auth_token}
+    
     payload = {
         "apiName": API_NAME,
         "apiVersion": API_VERSION,
         "requestID": request_id,
         "messageType": message_type,
-        "data": data or {},
+        "data": request_data,
     }
     await websocket.send(json.dumps(payload))
-    response_raw = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+    # Use longer timeout for hotkey requests which may take time
+    timeout = 10.0 if message_type == "HotkeysInCurrentModelRequest" else 5.0
+    response_raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
     return json.loads(response_raw)
 
 
@@ -69,19 +79,24 @@ async def _authenticate(
         "pluginDeveloper": plugin_developer,
     }
 
+    # Try to validate existing token first (but don't require it)
     if auth_token:
         try:
             response = await _send_request(websocket, "AuthenticationRequest", {
                 **auth_data,
                 "authenticationToken": auth_token,
             })
-            if response.get("messageType") == "AuthenticationResponse":
+            if response.get("messageType") == "AuthenticationResponse" and response.get("data", {}).get("authenticated"):
+                logger.debug(f"✅ Existing token validated")
                 return auth_token
         except asyncio.TimeoutError:
-            logger.debug("Auth token validation timed out")
+            logger.debug("Auth token validation timed out, will get fresh token")
+        except Exception as e:
+            logger.debug(f"Existing token invalid or expired: {e}")
 
+    # Get fresh token if validation failed or no token provided
     try:
-        logger.debug("🔑 Requesting new authentication token...")
+        logger.debug("🔑 Requesting fresh authentication token...")
         token_response = await _send_request(websocket, "AuthenticationTokenRequest", auth_data)
         token_data = token_response.get("data", {})
         new_token = token_data.get("authenticationToken")
@@ -93,8 +108,9 @@ async def _authenticate(
             **auth_data,
             "authenticationToken": new_token,
         })
-        if auth_response.get("messageType") == "AuthenticationResponse":
+        if auth_response.get("messageType") == "AuthenticationResponse" and auth_response.get("data", {}).get("authenticated"):
             _persist_auth_token(new_token)
+            logger.debug(f"✅ Fresh token obtained and validated")
             return new_token
 
         return None
@@ -129,14 +145,27 @@ def _persist_auth_token(auth_token: str) -> None:
         logger.warning(f"⚠️  Could not save VTuber Studio auth token: {exc}")
 
 
-async def _get_hotkeys(websocket: Any) -> list[dict[str, Any]]:
-    response = await _send_request(websocket, "HotkeysInCurrentModelRequest")
-    data = response.get("data", {})
-    return data.get("availableHotkeys", []) or data.get("hotkeys", []) or []
+async def _get_hotkeys(websocket: Any, auth_token: str | None = None) -> list[dict[str, Any]]:
+    try:
+        response = await _send_request(websocket, "HotkeysInCurrentModelRequest", auth_token=auth_token)
+        if response.get("messageType") != "HotkeysInCurrentModelResponse":
+            logger.debug(f"❌ Unexpected hotkey response type: {response.get('messageType')}")
+            return []
+        data = response.get("data", {})
+        hotkeys = data.get("availableHotkeys", []) or data.get("hotkeys", []) or []
+        if hotkeys:
+            logger.debug(f"📋 Loaded {len(hotkeys)} hotkeys from VTuber Studio")
+        return hotkeys
+    except asyncio.TimeoutError:
+        logger.warning("⏱️  Timeout fetching hotkeys from VTuber Studio")
+        return []
+    except Exception as e:
+        logger.warning(f"⚠️  Error fetching hotkeys: {e}")
+        return []
 
 
-async def _trigger_hotkey(websocket: Any, hotkey_id: str) -> bool:
-    response = await _send_request(websocket, "HotkeyTriggerRequest", {"hotkeyID": hotkey_id})
+async def _trigger_hotkey(websocket: Any, hotkey_id: str, auth_token: str | None = None) -> bool:
+    response = await _send_request(websocket, "HotkeyTriggerRequest", {"hotkeyID": hotkey_id}, auth_token=auth_token)
     return response.get("messageType") == "HotkeyTriggerResponse"
 
 
@@ -194,7 +223,7 @@ async def _list_hotkeys_for_controller(controller: 'VTuberStudioController') -> 
     if not controller.websocket or not controller._auth_token:
         if not await controller.connect():
             return []
-    return await _get_hotkeys(controller.websocket)
+    return await _get_hotkeys(controller.websocket, auth_token=controller._auth_token)
 
 
 async def _trigger_expression_async(
@@ -301,6 +330,8 @@ class VTuberStudioController:
         self.websocket: Any | None = None
         self._auth_token: str | None = None
         self.current_expression: str | None = None
+        self._hotkeys_cache: list[dict[str, Any]] = []
+        self._hotkeys_cache_time: float = 0.0
 
     async def connect(self) -> bool:
         """Connect and authenticate with VTuber Studio"""
@@ -340,15 +371,33 @@ class VTuberStudioController:
             self.websocket = None
             self._auth_token = None
             self.current_expression = None
+            self._hotkeys_cache = []
+            self._hotkeys_cache_time = 0.0
 
     async def clear_expression(self, clear_names: tuple[str, ...] | None = None) -> bool:
         """Clear the current expression by trying known clear hotkeys."""
         clear_candidates = clear_names or DEFAULT_CLEAR_NAMES
+        # Get hotkeys once for all candidates instead of fetching repeatedly
+        if not self.websocket or not self._auth_token:
+            if not await self.connect():
+                return False
+        
+        hotkeys = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
+        if not hotkeys:
+            logger.debug("⚠️  No hotkeys available for clearing")
+            return False
+        
         for candidate in clear_candidates:
             logger.debug(f"🎭 Trying clear expression candidate: {candidate or 'remove_all'}")
-            if await self.set_expression(candidate):
-                return True
-        logger.warning("⚠️  No clear expression hotkey matched")
+            hotkey_id = _find_hotkey_id(hotkeys, candidate)
+            if hotkey_id:
+                success = await _trigger_hotkey(self.websocket, hotkey_id, auth_token=self._auth_token)
+                if success:
+                    self.current_expression = None
+                    logger.info(f"🎭 Expression cleared")
+                    return True
+        
+        logger.debug("⚠️  No matching clear expression hotkey found")
         return False
 
     async def set_expression(self, expression_name: str) -> bool:
@@ -356,16 +405,17 @@ class VTuberStudioController:
         if not self.websocket or not self._auth_token:
             # Try to reconnect if not authenticated
             if not await self.connect():
+                logger.warning(f"⚠️  Failed to establish VTuber connection for expression '{expression_name}'")
                 return False
 
         target_expression = expression_name.strip()
         is_clear_expression = target_expression == ""
 
         async def _attempt_trigger() -> bool:
-            logger.debug(f"🎭 Getting hotkeys...")
-            hotkeys = await _get_hotkeys(self.websocket)
+            logger.debug(f"🎭 Fetching hotkeys for expression: '{expression_name}'")
+            hotkeys = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
             if not hotkeys:
-                logger.warning("⚠️  No hotkeys available")
+                logger.debug("⚠️  No hotkeys available - model may not have expressions or VTuber connection issue")
                 return False
 
             hotkey_id = _find_hotkey_id(hotkeys, expression_name)
@@ -374,7 +424,7 @@ class VTuberStudioController:
                 return False
 
             logger.info(f"🎭 Triggering expression: {expression_name or 'clear'}")
-            success = await _trigger_hotkey(self.websocket, hotkey_id)
+            success = await _trigger_hotkey(self.websocket, hotkey_id, auth_token=self._auth_token)
             if success:
                 self.current_expression = None if is_clear_expression else target_expression
                 logger.info(f"🎭 Current VTuber expression: {self.current_expression or 'clear'}")
@@ -392,14 +442,17 @@ class VTuberStudioController:
         except Exception as e:
             error_name = type(e).__name__
             error_text = str(e)
-            if "ConnectionClosed" in error_name or "1002" in error_text or "protocol error" in error_text.lower():
-                logger.warning(f"⚠️  VTuber connection dropped during '{expression_name}' ({error_name}: {e}). Reconnecting once...")
+            is_connection_error = "ConnectionClosed" in error_name or "1002" in error_text or "protocol error" in error_text.lower()
+            
+            if is_connection_error:
+                logger.warning(f"⚠️  VTuber connection dropped during '{expression_name}' ({error_name}). Reconnecting...")
                 await self.disconnect()
                 if await self.connect():
+                    logger.debug(f"✅ Reconnected to VTuber Studio, retrying expression trigger")
                     try:
                         return await _attempt_trigger()
                     except Exception as retry_error:
-                        logger.warning(f"⚠️  Retry failed for '{expression_name}': {type(retry_error).__name__}: {retry_error}")
+                        logger.warning(f"⚠️  Retry failed for '{expression_name}': {type(retry_error).__name__}")
                         await self.disconnect()
                         return False
                 return False
