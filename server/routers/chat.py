@@ -23,7 +23,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
         await websocket.close()
         return
 
-    # Send initial status on connect
     await _send_status(websocket, pipeline)
 
     try:
@@ -39,15 +38,18 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
             if msg_type == "chat":
                 text = (data.get("text") or "").strip()
-                if not text:
-                    continue
-                await _handle_chat(websocket, text)
+                if text:
+                    await _handle_chat(websocket, text)
 
             elif msg_type == "switch_backend":
                 backend = (data.get("backend") or "").lower()
                 if backend in ("gemini", "lmstudio"):
                     pipeline.config.preferred_backend = backend
                     await _send_status(websocket, pipeline)
+
+            elif msg_type == "toggle_audio":
+                pipeline.config.audio_play_output = not pipeline.config.audio_play_output
+                await _send_status(websocket, pipeline)
 
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
@@ -66,6 +68,7 @@ async def _handle_chat(websocket: WebSocket, user_text: str) -> None:
         await websocket.send_json({"type": "thinking"})
 
         result: dict[str, Any] = {"text": "", "elapsed": 0.0, "error": None}
+        loop = asyncio.get_running_loop()
 
         def on_response(_: str, assistant: str, elapsed: float) -> None:
             result["text"] = assistant
@@ -74,10 +77,27 @@ async def _handle_chat(websocket: WebSocket, user_text: str) -> None:
         def on_error(exc: Exception) -> None:
             result["error"] = str(exc)
 
+        def on_audio_start() -> None:
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "speaking", "state": "start"}),
+                loop,
+            )
+
+        def on_audio_end() -> None:
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "speaking", "state": "end"}),
+                loop,
+            )
+
         await asyncio.to_thread(
             pipeline.process_turn,
             user_text,
-            TurnCallbacks(on_response=on_response, on_error=on_error),
+            TurnCallbacks(
+                on_response=on_response,
+                on_error=on_error,
+                on_audio_start=on_audio_start,
+                on_audio_end=on_audio_end,
+            ),
         )
 
         if result["error"]:
@@ -109,4 +129,5 @@ async def _send_status(websocket: WebSocket, pipeline: Any) -> None:
         "lmstudio_healthy": lm_healthy,
         "gemini_model": cfg.google_aistudio_model or "gemini-2.5-flash",
         "lmstudio_model": cfg.model_name,
+        "audio_enabled": cfg.audio_play_output,
     })

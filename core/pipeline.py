@@ -24,6 +24,8 @@ from utils.vtuber_controller import get_vtuber_controller, trigger_expression
 class TurnCallbacks:
     on_response: Callable[[str, str, float], None] | None = None
     on_error: Callable[[Exception], None] | None = None
+    on_audio_start: Callable[[], None] | None = None
+    on_audio_end: Callable[[], None] | None = None
 
 
 def build_messages(
@@ -123,7 +125,11 @@ class VTuberPipeline:
                     trigger_expression(expression, controller=vtuber_ctrl)
                 elif vtuber_ctrl:
                     trigger_expression("smile_happy", controller=vtuber_ctrl)
+                if cb.on_audio_start:
+                    cb.on_audio_start()
                 play_audio(rvc_ready_path, device_id=device_id, blocking=True)
+                if cb.on_audio_end:
+                    cb.on_audio_end()
                 schedule_expression_clear(delay=2.0)
                 schedule_subtitle_clear(delay=5.0)
             else:
