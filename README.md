@@ -1,112 +1,287 @@
-# VAI
+# 🎭 VAI - AI VTuber Chat System
 
-VAI is a small AI VTuber-style chat pipeline for Windows. It takes your input from the console, sends it to LM Studio, turns the reply into speech, optionally runs that audio through Applio/RVC, and can play the result to an audio device or VB-Audio cable.
+VAI is a comprehensive Windows-based AI VTuber chat pipeline. It combines conversational AI, text-to-speech synthesis, voice conversion, and avatar expression control into one integrated system.
 
-## What it does
+## 🌟 What It Does
 
-- Chat with a local LLM through LM Studio
-- Keep conversation history between runs
-- Generate speech with gTTS-based TTS
-- Apply simple speaker and pitch presets
-- Optionally run the audio through Applio/RVC
-- Play the final output to a selected audio device
+- 🤖 **Chat with AI** - Google Gemini or Local LM Studio backend
+- 💬 **Conversation Memory** - Full chat history with context awareness
+- 🎤 **Speech Synthesis** - Edge TTS with voice presets and pitch control
+- 🎙️ **Voice Conversion** - Optional Applio/RVC for voice transformation
+- 🎭 **Avatar Control** - VTuber Studio integration for expression sync
+- 😠 **Emotion Detection** - Automatic Thai sentiment analysis
+- 🎯 **Dual Interface** - CLI mode or Desktop GUI
+- 👤 **Voice Recognition** - Optional speaker identification
 
-## Requirements
+## 📋 Requirements
 
-- Windows
-- Python 3.10+ recommended
-- LM Studio running locally with an OpenAI-compatible server enabled
-- ffmpeg installed and available on PATH for audio processing
-- Optional: Applio/RVC installation for voice conversion
+- **Windows 10/11**
+- **Python 3.10+** recommended
+- **ffmpeg** installed and on PATH
+- **One of:**
+  - LM Studio running locally with OpenAI-compatible server
+  - Google Account with Gemini API access
+- **Optional:**
+  - VTuber Studio for avatar control
+  - Applio/RVC for voice conversion
+  - VB-Audio Virtual Cable for advanced audio routing
 
-## Quick Start
+## 🚀 Quick Start
 
-1. Start LM Studio and load the model you want to use.
-2. Install the Python dependencies:
+### Installation
 
-```bat
+1. **Install dependencies:**
+```bash
 python -m pip install -r requirements.txt
 ```
 
-3. Run the app:
+2. **Set up `.env` file:**
+```bash
+# Choose your backend
+PREFERRED_BACKEND=gemini
 
-```bat
+# Audio output (VB-Audio device 11 recommended)
+AUDIO_OUTPUT_DEVICE=11
+AUDIO_PLAY_OUTPUT=true
+
+# VTuber Studio (optional but recommended)
+VTUBER_STUDIO_ENABLED=true
+VTUBER_STUDIO_API_URL=ws://localhost:8001
+```
+
+3. **Run the app:**
+
+**CLI Mode:**
+```bash
 python main.py
 ```
 
-You can also use `Run.bat`, which installs requirements and launches the app.
-
-## Configuration
-
-The app reads settings from `.env` in the project root. If a variable is not set, the defaults in `config/settings.py` are used.
-
-### LM Studio
-
-- `LM_STUDIO_BASE_URL` - LM Studio server URL, default `http://127.0.0.1:1234`
-- `LM_STUDIO_MODEL` - model name passed to LM Studio, default `qwen/qwen3-4b`
-- `LM_STUDIO_TEMPERATURE` - sampling temperature, default `0.7`
-- `LM_STUDIO_MAX_TOKENS` - max response tokens, default `512`
-- `LM_STUDIO_HISTORY` - number of messages kept in memory, default `100`
-- `LM_STUDIO_TIMEOUT` - request timeout in seconds, default `120`
-
-### TTS
-
-- `EDGE_TTS_VOICE` - language/voice code, default `th`
-- `EDGE_TTS_RATE` - speech rate, default `+20%`
-- `EDGE_TTS_VOLUME` - output volume, default `+0%`
-- `EDGE_TTS_FORMAT` - output format, default `mp3`
-- `EDGE_TTS_SPEAKER` - speaker preset, default `normal`
-- `EDGE_TTS_PITCH_SEMITONES` - extra pitch shift, default `0`
-
-Supported speaker presets are `normal`, `high`, `low`, `chipmunk`, and `deep`.
-
-### RVC / Applio
-
-- `EDGE_APPLIO_PATH` - path to your Applio installation, default `C:\Users\MSI\Desktop\Applio`
-- `EDGE_APPLIO_TIMEOUT` - Applio timeout in seconds, default `120`
-- `RVC_MODEL_PTH` - path to the `.pth` model file
-- `RVC_MODEL_INDEX` - path to the `.index` file
-- `RVC_EMBEDDER_MODEL` - embedder model name, default `contentvec`
-- `RVC_EMBEDDER_CUSTOM` - custom embedder path, if used
-- `RVC_F0_METHOD` - pitch extraction method, default `rmvpe`
-
-If RVC processing cannot run, the app falls back to copying the input audio into the RVC output folder so the pipeline can continue.
-
-### Audio Output
-
-- `AUDIO_OUTPUT_DEVICE` - output device index
-- `AUDIO_PLAY_OUTPUT` - `true` or `false`, default `true`
-
-If no audio device is set, the app tries to detect a VB-Audio device automatically.
-
-## Runtime Commands
-
-While the app is running, these commands are available in the console:
-
-- `/speaker <name>` - change the current speaker preset
-- `/pitch <semitones>` - change the additional pitch offset
-- `/speakers` - list the supported presets
-- `exit` or `quit` - close the app
-
-Example:
-
-```text
-/speaker chipmunk
-/pitch 2
+**GUI Mode:**
+```bash
+python app.py
 ```
 
-## Project Layout
+**One-Click Launch:**
+```bash
+Run.bat
+```
 
-- `main.py` - application entrypoint
-- `config/` - settings and personality prompt
-- `data/` - saved chat history
-- `tts/` - speech synthesis and audio playback
-- `rvc/` - Applio/RVC integration and model files
-- `utils/` - logging, cleanup, and history helpers
-- `scripts/` - diagnostic helpers for devices and RVC config
+### First Run
 
-## Notes
+1. Start VTuber Studio (if using avatar)
+2. Load an avatar model in VTuber Studio
+3. Run `python main.py` or `python app.py`
+4. Start chatting!
 
-- The default personality prompt is stored in `config/personality.txt`.
-- Chat history is saved to `data/chat_history.json`.
-- Generated audio is written to `tts/output/` and processed RVC output to `rvc/output/`.
+Commands in CLI:
+- `/speaker <name>` - Change voice
+- `/pitch <value>` - Adjust pitch
+- `/backend <type>` - Switch AI backend
+- `exit` - Quit
+
+## ⚙️ Configuration
+
+The app reads settings from `.env` in the project root. See the comprehensive guide below for all options.
+
+### Backend Selection
+
+**Google Gemini (Recommended - Cloud):**
+```env
+PREFERRED_BACKEND=gemini
+GOOGLE_AISTUDIO_MODEL=gemini-2.5-flash
+```
+
+**Local LM Studio:**
+```env
+PREFERRED_BACKEND=lmstudio
+LM_STUDIO_BASE_URL=http://127.0.0.1:1234
+LM_STUDIO_MODEL=qwen/qwen3-4b
+LM_STUDIO_TEMPERATURE=0.7
+```
+
+### Voice & Audio
+
+```env
+# Speaker presets: normal, high, low, chipmunk, deep
+EDGE_TTS_SPEAKER=normal
+EDGE_TTS_PITCH_SEMITONES=0
+
+# Audio device selection
+AUDIO_OUTPUT_DEVICE=11
+AUDIO_PLAY_OUTPUT=true
+```
+
+### Avatar Integration (Optional)
+
+```env
+# VTuber Studio connection
+VTUBER_STUDIO_ENABLED=true
+VTUBER_STUDIO_API_URL=ws://localhost:8001
+# Token auto-generated on first connection
+
+# Supported expressions: angry, smile_happy, sad, brush, smug, clear
+```
+
+### Voice Conversion (Optional)
+
+```env
+# Applio/RVC for voice transformation
+EDGE_APPLIO_PATH=C:\Users\MSI\Desktop\Applio
+RVC_MODEL_PTH=rvc/models/no7/no7_talk.pth
+RVC_MODEL_INDEX=rvc/models/no7/added_IVF1259_Flat_nprobe_1_no7_talk_v2.index
+```
+
+### Voice Recognition (Optional)
+
+```env
+VOICE_INPUT_ENABLED=1
+VOICE_MODE=voice_activation
+CHAT_INPUT_ENABLED=1
+```
+
+**See `README_COMPREHENSIVE.md` for complete configuration reference.**
+
+## 🎮 Runtime Commands
+
+Available in CLI mode (`main.py`) while running:
+
+```
+/speaker <name>      - Change voice preset (normal, high, low, chipmunk, deep)
+/pitch <semitones>   - Adjust pitch (e.g., /pitch 2 or /pitch -1)
+/backend <type>      - Switch backend (gemini or lmstudio)
+/speakers            - List available speaker presets
+/hotkeys             - Show available VTuber Studio expressions
+exit                 - Close the application
+```
+
+**Examples:**
+```
+You: ลองพูดเสียงสูงหน่อยครับ
+/speaker chipmunk
+/pitch 3
+AI: [responds in chipmunk voice]
+
+You: /backend gemini
+✓ Backend switched to: GEMINI
+```
+
+Desktop GUI (`app.py`) uses menu buttons instead of text commands.
+
+## 📁 Project Structure
+
+```
+VAI/
+├── main.py                        # CLI chat interface
+├── app.py                        # Desktop GUI (tkinter)
+├── Run.bat                       # One-click launcher
+│
+├── config/
+│   ├── settings.py               # Configuration management
+│   └── personality.txt           # AI personality prompt
+│
+├── utils/
+│   ├── vtuber_controller.py      # VTuber Studio API wrapper
+│   ├── logger.py                 # Logging system
+│   ├── history.py                # Chat history management
+│   ├── inputer.py                # Voice input interface
+│   └── cleanup.py                # File cleanup
+│
+├── tts/
+│   ├── edge_tts_engine.py        # Text-to-speech
+│   ├── audio_player.py           # Audio playback
+│   └── output/                   # Generated audio
+│
+├── rvc/
+│   ├── applio_stub.py            # Voice conversion wrapper
+│   ├── models/                   # RVC model files
+│   └── output/                   # Processed audio
+│
+├── scripts/
+│   ├── voice_recognize.py        # Speaker identification
+│   ├── vtubestudio_connect.py    # VTuber connection test
+│   ├── check_rvc_config.py       # Configuration validator
+│   ├── list_audio_devices.py     # Audio device detection
+│   └── ...                       # Other utilities
+│
+├── data/
+│   ├── chat_history.json         # Saved conversations
+│   └── voice_profiles/           # Speaker profiles
+│
+├── docs/
+│   ├── VTUBER_STUDIO_INTEGRATION.md
+│   └── VOICE_RECOGNITION.md
+│
+├── logs/                         # Application logs
+├── subtitle.txt                  # Subtitle output (for streaming)
+│
+├── QUICK_REFERENCE.md            # ⚡ Start here for quick reference
+├── README_COMPREHENSIVE.md       # 📚 Complete documentation
+└── requirements.txt              # Python dependencies
+```
+
+## 🎭 Avatar Expression System
+
+VAI automatically detects emotions in AI responses and updates your VTuber avatar's expressions in real-time.
+
+### How It Works
+
+1. **Sentiment Detection** - Thai keywords in response are analyzed
+2. **Expression Mapping** - Emotion mapped to hotkey:
+   - `โกรธ`, `แย่` → angry
+   - `ดี`, `ยิ้ม` → smile_happy  
+   - `เศร้า`, `ทุกข์` → sad
+3. **Avatar Sync** - VTuber Studio API triggers expression
+4. **Audio Playback** - Audio plays while expression is active
+5. **Auto Clear** - Expression returns to neutral after 2 seconds
+
+### Setup
+
+1. Open VTuber Studio and load an avatar
+2. Create hotkeys in Settings → Hotkeys:
+   - angry, smile_happy, sad, brush, smug, clear
+3. Link hotkeys to expression files (.exp3.json)
+4. Enable in `.env`: `VTUBER_STUDIO_ENABLED=true`
+5. Run VAI - expressions will sync automatically!
+
+**For detailed setup:** See `docs/VTUBER_STUDIO_INTEGRATION.md`
+
+## 🔧 Troubleshooting
+
+### Avatar Not Working
+```bash
+# Check VTuber connection
+python scripts/vtubestudio_connect.py
+```
+- ✅ Ensure VTuber Studio is running
+- ✅ Check that model is loaded
+- ✅ Verify hotkeys are created
+
+### Audio Not Playing
+```bash
+# List available audio devices
+python scripts/list_audio_devices.py
+```
+- ✅ Update `AUDIO_OUTPUT_DEVICE` in .env
+- ✅ Verify ffmpeg is installed
+- ✅ Check `AUDIO_PLAY_OUTPUT=true`
+
+### Backend Issues
+- **Gemini**: Check internet connection and API key
+- **LM Studio**: Ensure it's running on port 1234
+- **LM Studio**: Load a model in the UI first
+
+## 📚 Documentation
+
+- 📖 **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Fast reference guide ⭐ Start here!
+- 📖 **[README_COMPREHENSIVE.md](README_COMPREHENSIVE.md)** - Complete documentation
+- 📖 **[docs/VTUBER_STUDIO_INTEGRATION.md](docs/VTUBER_STUDIO_INTEGRATION.md)** - Avatar integration
+- 📖 **[docs/VOICE_RECOGNITION.md](docs/VOICE_RECOGNITION.md)** - Voice input setup
+- 📖 **[EXPRESSION_SYSTEM_INTEGRATED.md](EXPRESSION_SYSTEM_INTEGRATED.md)** - Expression system details
+
+## 📝 Notes
+
+- **Personality**: Customize `config/personality.txt` for AI behavior
+- **History**: Chat history saved to `data/chat_history.json`
+- **TTS Output**: Generated audio in `tts/output/`
+- **Logging**: Check `logs/` for detailed debugging information
+- **Streaming**: Use `subtitle.txt` with OBS for overlay subtitles

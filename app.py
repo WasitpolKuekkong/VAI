@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import webbrowser
-from datetime import datetime
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -23,15 +23,13 @@ import soundfile as sf
 import speech_recognition as sr
 import websockets
 
-from config.settings import BASE_DIR, AppConfig, load_personality, load_settings
-from main import build_messages, chat_with_backend, chat_with_backend_and_expression, ensure_output_dirs, write_subtitle, clear_subtitle, schedule_subtitle_clear, schedule_expression_clear
-from rvc.applio_stub import prime_applio_worker, process_with_rvc
-from tts.audio_player import find_vb_audio_device, play_audio
-from tts.edge_tts_engine import SpeakerName, synthesize_speech
-from utils.cleanup import cleanup_old_files
-from utils.history import load_history, save_history
+from config.settings import BASE_DIR, AppConfig, load_settings
+from core.pipeline import VTuberPipeline, TurnCallbacks
+from main import ensure_output_dirs
+from rvc.applio_stub import prime_applio_worker
+from utils.history import load_history
 from utils.logger import logger
-from utils.vtuber_controller import trigger_expression, clear_expression, get_vtuber_controller, _run_in_loop
+from utils.vtuber_controller import _run_in_loop
 
 
 class TkLogHandler(logging.Handler):
@@ -90,10 +88,7 @@ class AIVTApp:
 		ensure_output_dirs(self.config)
 		prime_applio_worker(self.config)
 
-		self.personality = load_personality(self.config.personality_path)
-		self.history = load_history(self.config.history_file)
-		self.current_speaker = self.config.tts_default_speaker  # type: ignore[assignment]
-		self.current_pitch = self.config.tts_default_pitch_semitones
+		self.pipeline = VTuberPipeline(self.config)
 		self.busy = False
 
 		self.root = Tk()
@@ -361,15 +356,15 @@ class AIVTApp:
 		self.input_box.delete("1.0", END)
 
 	def _reload_history(self) -> None:
-		self.history = load_history(self.config.history_file)
+		self.pipeline.history = load_history(self.config.history_file)
 		self._refresh_chat_view()
-		self.status_var.set(f"Loaded {len(self.history)} messages")
+		self.status_var.set(f"Loaded {len(self.pipeline.history)} messages")
 
 	def _refresh_chat_view(self) -> None:
 		self.chat_view.configure(state="normal")
 		self.chat_view.delete("1.0", END)
 		self.chat_view.insert(END, "Welcome to AIVT Desktop\n\n")
-		for item in self.history[-20:]:
+		for item in self.pipeline.history[-20:]:
 			role = item.get("role", "message").title()
 			content = item.get("content", "")
 			self.chat_view.insert(END, f"{role}: {content}\n\n")
@@ -833,60 +828,18 @@ class AIVTApp:
 
 	def _process_message(self, user_text: str) -> None:
 		try:
-			turn_start = time.perf_counter()
-			messages = build_messages(self.personality, self.history, user_text)
-			# Get response with expression
-			assistant_text, expression = chat_with_backend_and_expression(self.config, messages)
-			if not assistant_text:
-				raise RuntimeError("Backend returned empty response")
+			def on_response(_: str, a: str, elapsed: float) -> None:
+				self.root.after(0, lambda a=a, e=elapsed: self._on_success(user_text, a, e))
 
-			# Update subtitle while thinking
-			write_subtitle(f"คิดing...")
+			def on_error(exc: Exception) -> None:
+				msg = str(exc)
+				logger.error(f"Desktop app error: {exc}")
+				self.root.after(0, lambda m=msg: self._on_error(m))
 
-			self.history.append({"role": "user", "content": user_text})
-			self.history.append({"role": "assistant", "content": assistant_text})
-			self.history = self.history[-self.config.max_history_messages :]
-			save_history(self.history, self.config.history_file)
-
-			timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-			tts_path = self.config.tts_output_dir / f"reply_{timestamp}.{self.config.tts_output_format}"
-			asyncio.run(
-				synthesize_speech(
-					text=assistant_text,
-					output_path=tts_path,
-					voice=self.config.tts_voice,
-					rate=self.config.tts_rate,
-					volume=self.config.tts_volume,
-					speaker=self.current_speaker,  # type: ignore[arg-type]
-					pitch_semitones=self.current_pitch,
-				)
+			self.pipeline.process_turn(
+				user_text,
+				callbacks=TurnCallbacks(on_response=on_response, on_error=on_error),
 			)
-			rvc_ready_path = process_with_rvc(tts_path, self.config)
-			if self.config.audio_play_output:
-				device_id = self.config.audio_output_device or find_vb_audio_device()
-				if device_id is not None:
-					# Update subtitle with AI response while playing
-					write_subtitle(assistant_text)
-					
-					# Trigger expression (from LLM function call or sentiment analysis)
-					vtuber_ctrl = get_vtuber_controller()
-					if vtuber_ctrl and expression:
-						trigger_expression(expression, controller=vtuber_ctrl)
-					elif vtuber_ctrl:
-						# Fallback if no expression from LLM
-						trigger_expression("smile_happy", controller=vtuber_ctrl)
-					
-					# Play audio
-					play_audio(rvc_ready_path, device_id=device_id, blocking=True)
-					
-					# Schedule expression clear after 2 seconds
-					schedule_expression_clear(delay=2.0)
-					# Clear subtitle after playback
-					schedule_subtitle_clear(delay=3.0)
-			cleanup_old_files(self.config.tts_output_dir, max_files=5)
-
-			elapsed = time.perf_counter() - turn_start
-			self.root.after(0, lambda: self._on_success(user_text, assistant_text, elapsed))
 		except Exception as exc:
 			message = str(exc)
 			logger.error(f"Desktop app error: {exc}")
