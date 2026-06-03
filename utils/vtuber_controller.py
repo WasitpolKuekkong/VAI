@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import uuid
 import re
 import time
@@ -160,6 +161,12 @@ async def _get_hotkeys(websocket: Any, auth_token: str | None = None) -> list[di
         logger.warning("⏱️  Timeout fetching hotkeys from VTuber Studio")
         return []
     except Exception as e:
+        error_text = str(e)
+        # Re-raise connection errors so callers can reconnect instead of silently failing
+        if ("1002" in error_text or "1006" in error_text
+                or "ConnectionClosed" in type(e).__name__
+                or "protocol error" in error_text.lower()):
+            raise
         logger.warning(f"⚠️  Error fetching hotkeys: {e}")
         return []
 
@@ -260,17 +267,23 @@ async def _trigger_expression_async(
 
 
 _persistent_loop: asyncio.AbstractEventLoop | None = None
+_vts_lock = threading.Lock()  # Serialize all VTS operations — websockets are not thread-safe
 
 
 def _run_in_loop(coro):
-    """Helper to run coroutine in persistent event loop (never closes)."""
+    """Run coroutine in the persistent VTS event loop.
+
+    Uses _vts_lock so trigger_expression and clear_expression never share the
+    websocket concurrently (concurrent recv() calls cause 1002 protocol errors).
+    """
     global _persistent_loop
-    
+
     if _persistent_loop is None or _persistent_loop.is_closed():
         _persistent_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_persistent_loop)
-    
-    return _persistent_loop.run_until_complete(coro)
+
+    with _vts_lock:
+        return _persistent_loop.run_until_complete(coro)
 
 
 def trigger_expression(
@@ -377,12 +390,18 @@ class VTuberStudioController:
     async def clear_expression(self, clear_names: tuple[str, ...] | None = None) -> bool:
         """Clear the current expression by trying known clear hotkeys."""
         clear_candidates = clear_names or DEFAULT_CLEAR_NAMES
-        # Get hotkeys once for all candidates instead of fetching repeatedly
         if not self.websocket or not self._auth_token:
             if not await self.connect():
                 return False
-        
-        hotkeys = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
+
+        # Use cached hotkeys (same TTL as set_expression) to avoid extra round-trip
+        if not self._hotkeys_cache or (time.time() - self._hotkeys_cache_time) > 120:
+            hotkeys = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
+            self._hotkeys_cache = hotkeys
+            self._hotkeys_cache_time = time.time()
+        else:
+            hotkeys = self._hotkeys_cache
+
         if not hotkeys:
             logger.debug("⚠️  No hotkeys available for clearing")
             return False
@@ -412,8 +431,12 @@ class VTuberStudioController:
         is_clear_expression = target_expression == ""
 
         async def _attempt_trigger() -> bool:
-            logger.debug(f"🎭 Fetching hotkeys for expression: '{expression_name}'")
-            hotkeys = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
+            # Use cached hotkeys (TTL 120s) to avoid a round-trip every call
+            if not self._hotkeys_cache or (time.time() - self._hotkeys_cache_time) > 120:
+                logger.debug(f"🎭 Fetching hotkeys for expression: '{expression_name}'")
+                self._hotkeys_cache = await _get_hotkeys(self.websocket, auth_token=self._auth_token)
+                self._hotkeys_cache_time = time.time()
+            hotkeys = self._hotkeys_cache
             if not hotkeys:
                 logger.debug("⚠️  No hotkeys available - model may not have expressions or VTuber connection issue")
                 return False
@@ -466,11 +489,23 @@ _vtuber_controller: VTuberStudioController | None = None
 
 
 async def initialize_vtuber_controller() -> VTuberStudioController | None:
-    """Initialize and connect VTuber Studio controller"""
+    """Initialize and connect VTuber Studio controller (async — use only from _persistent_loop context)."""
     global _vtuber_controller
     _vtuber_controller = VTuberStudioController()
     if await _vtuber_controller.connect():
         return _vtuber_controller
+    return None
+
+
+def initialize_vtuber_controller_sync() -> VTuberStudioController | None:
+    """Sync wrapper — always uses _persistent_loop so the websocket lives in the same loop
+    as trigger_expression() and clear_expression(). Call via asyncio.to_thread() from async code."""
+    global _vtuber_controller
+    _vtuber_controller = VTuberStudioController()
+    connected = _run_in_loop(_vtuber_controller.connect())
+    if connected:
+        return _vtuber_controller
+    _vtuber_controller = None
     return None
 
 
@@ -480,8 +515,17 @@ def get_vtuber_controller() -> VTuberStudioController | None:
 
 
 async def cleanup_vtuber_controller():
-    """Clean up VTuber Studio connection"""
+    """Async cleanup — only safe to await from _persistent_loop context."""
     global _vtuber_controller
     if _vtuber_controller:
         await _vtuber_controller.disconnect()
+        _vtuber_controller = None
+
+
+def cleanup_vtuber_controller_sync() -> None:
+    """Sync wrapper — disconnects in _persistent_loop so the same loop that owns the websocket
+    does the cleanup. Call via asyncio.to_thread() from async code."""
+    global _vtuber_controller
+    if _vtuber_controller:
+        _run_in_loop(_vtuber_controller.disconnect())
         _vtuber_controller = None

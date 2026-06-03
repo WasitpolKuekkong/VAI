@@ -10,6 +10,8 @@ export const useVoiceInput = (onTranscript: (text: string) => void) => {
   const audioLevel = ref(0)
   const isSupported = ref(false)
   const hasPermission = ref(false)
+  // ID of the selected microphone device (empty = system default)
+  const selectedMicId = ref('')
 
   let recognition: any = null
   let audioCtx: AudioContext | null = null
@@ -26,9 +28,16 @@ export const useVoiceInput = (onTranscript: (text: string) => void) => {
   // --- Audio level meter ---
 
   const startLevelMeter = async (): Promise<boolean> => {
-    if (audioCtx) return true
+    // Restart meter if device changed
+    if (audioCtx) stopLevelMeter()
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      const audioConstraint: MediaStreamConstraints = {
+        audio: selectedMicId.value
+          ? { deviceId: { exact: selectedMicId.value } }
+          : true,
+        video: false,
+      }
+      stream = await navigator.mediaDevices.getUserMedia(audioConstraint)
       hasPermission.value = true
       audioCtx = new AudioContext()
       analyser = audioCtx.createAnalyser()
@@ -125,6 +134,26 @@ export const useVoiceInput = (onTranscript: (text: string) => void) => {
 
   // --- Public API ---
 
+  const setMicDevice = async (deviceId: string) => {
+    selectedMicId.value = deviceId
+    // Restart level meter with new device if currently running
+    if (audioCtx || stream) {
+      const wasVAD = isVAD.value
+      if (wasVAD) {
+        isVAD.value = false
+        stopSTT(true)
+      }
+      stopLevelMeter()
+      if (wasVAD) {
+        const ok = await startLevelMeter()
+        if (ok) {
+          isVAD.value = true
+          startSTT()
+        }
+      }
+    }
+  }
+
   const toggleVAD = async () => {
     if (isVAD.value) {
       isVAD.value = false
@@ -173,8 +202,10 @@ export const useVoiceInput = (onTranscript: (text: string) => void) => {
     audioLevel,
     isSupported,
     hasPermission,
+    selectedMicId,
     startPTT,
     stopPTT,
     toggleVAD,
+    setMicDevice,
   }
 }

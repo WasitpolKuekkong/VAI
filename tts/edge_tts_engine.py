@@ -41,7 +41,7 @@ def _apply_speaker_preset(audio, speaker: SpeakerName):
     return _pitch_shift(audio, semitones)
 
 
-async def synthesize_speech(
+def synthesize_speech(
     text: str,
     output_path: Path,
     voice: str = "th",
@@ -52,35 +52,31 @@ async def synthesize_speech(
 ) -> Path:
     """
     Synthesize speech using Google Text-to-Speech (gTTS) with speed and pitch controls.
-
-    - `speaker` selects a preset timbre (implemented via pitch shift).
-    - `pitch_semitones` applies additional pitch shift in semitones.
+    Always writes a WAV file so the audio player can skip MP3 decoding.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        tts = gTTS(text=text, lang=voice, slow=False)
-        mp3_path = output_path.with_suffix(".mp3")
-        tts.save(str(mp3_path))
-
-        # Load and process audio
         from pydub import AudioSegment
+        import io
 
-        audio = AudioSegment.from_mp3(str(mp3_path))
+        tts = gTTS(text=text, lang=voice, slow=False)
+        mp3_buf = io.BytesIO()
+        tts.write_to_fp(mp3_buf)
+        mp3_buf.seek(0)
+        audio = AudioSegment.from_mp3(mp3_buf)
 
-        # Apply speed adjustment
         speed_mult = _parse_speed_multiplier(rate)
         if speed_mult != 1.0:
             audio = audio.speedup(playback_speed=speed_mult)
 
-        # Apply speaker preset pitch
         audio = _apply_speaker_preset(audio, speaker)
 
-        # Apply additional pitch shift if requested
         if pitch_semitones:
             audio = _pitch_shift(audio, pitch_semitones)
 
-        audio.export(str(mp3_path), format="mp3")
-        return mp3_path
+        wav_path = output_path.with_suffix(".wav")
+        audio.export(str(wav_path), format="wav")
+        return wav_path
     except Exception as exc:
         raise RuntimeError(f"TTS synthesis failed with language '{voice}': {exc}") from exc

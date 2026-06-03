@@ -8,6 +8,8 @@ from dataclasses import dataclass
 class LLMResponse:
     text: str
     expression: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class LLMBackend(ABC):

@@ -1,8 +1,25 @@
 <script setup lang="ts">
-const { messages, status, isThinking, isConnected, isSpeaking, sendChat, switchBackend, toggleAudio } = useVAISocket()
+const {
+  messages, status, isThinking, isConnected, isSpeaking,
+  currentExpression, vtsConnected, restreamConnected,
+  vtsStatusMessage, restreamStatusMessage, restreamMessages,
+  sendChat, switchBackend, toggleAudio,
+  changeModel, setRestreamToLlm, setTTS, setAudioOutput,
+  connectVTS, disconnectVTS,
+  connectRestream, disconnectRestream,
+} = useVAISocket()
 
 const inputText = ref('')
 const chatContainer = ref<HTMLElement | null>(null)
+const showSettings = ref(false)
+const showRestream = ref(false)
+const unreadRestream = ref(0)
+
+// Count unread when panel is closed
+watch(() => restreamMessages.value.length, () => {
+  if (!showRestream.value) unreadRestream.value++
+})
+watch(showRestream, (open) => { if (open) unreadRestream.value = 0 })
 
 // Voice: transcript from STT gets sent directly to chat
 const onVoiceTranscript = (text: string) => {
@@ -15,6 +32,7 @@ const {
   isListening, isVAD, isPTT, transcript,
   audioLevel, isSupported, hasPermission,
   startPTT, stopPTT, toggleVAD,
+  selectedMicId, setMicDevice,
 } = useVoiceInput(onVoiceTranscript)
 
 // --- Input handling ---
@@ -51,6 +69,43 @@ watch([messages, isThinking], async () => {
   await nextTick()
   chatContainer.value?.scrollTo({ top: chatContainer.value.scrollHeight, behavior: 'smooth' })
 }, { deep: true })
+
+// ── Gemini stats ─────────────────────────────────────────────────────────────
+const geminiStats = ref<{ rpm: number; tpm: number; rpd: number } | null>(null)
+
+const fetchGeminiStats = async () => {
+  if (status.value?.backend !== 'gemini') return
+  try {
+    const data = await $fetch<{ rpm: number; tpm: number; rpd: number }>('/api/gemini-stats')
+    geminiStats.value = data
+  } catch {}
+}
+
+let statsTimer: ReturnType<typeof setInterval> | null = null
+watch(() => status.value?.backend, (backend) => {
+  if (statsTimer) clearInterval(statsTimer)
+  if (backend === 'gemini') {
+    fetchGeminiStats()
+    statsTimer = setInterval(fetchGeminiStats, 5000)
+  } else {
+    geminiStats.value = null
+  }
+}, { immediate: true })
+
+onUnmounted(() => { if (statsTimer) clearInterval(statsTimer) })
+
+// ── Expression badge ──────────────────────────────────────────────────────────
+const EXPRESSION_META: Record<string, { label: string; color: string; icon: string }> = {
+  angry:       { label: 'Angry',   color: 'text-red-400 bg-red-900/40 border-red-700',          icon: '😠' },
+  smile_happy: { label: 'Happy',   color: 'text-yellow-400 bg-yellow-900/30 border-yellow-700', icon: '😊' },
+  sad:         { label: 'Sad',     color: 'text-blue-400 bg-blue-900/40 border-blue-700',        icon: '😢' },
+  neutral:     { label: 'Neutral', color: 'text-zinc-400 bg-zinc-800/60 border-zinc-700',        icon: '😐' },
+}
+
+const expressionMeta = computed(() => {
+  const expr = currentExpression.value || 'neutral'
+  return EXPRESSION_META[expr] ?? { label: expr, color: 'text-zinc-400 bg-zinc-800/60 border-zinc-700', icon: '🎭' }
+})
 </script>
 
 <template>
@@ -59,7 +114,7 @@ watch([messages, isThinking], async () => {
     <!-- ─── Header ─── -->
     <header class="flex items-center justify-between px-4 h-12 bg-zinc-900 border-b border-zinc-800 flex-shrink-0">
 
-      <!-- Left: logo + connection -->
+      <!-- Left: logo + connection + Restream chat toggle -->
       <div class="flex items-center gap-2.5">
         <span
           class="w-2 h-2 rounded-full transition-colors duration-500 flex-shrink-0"
@@ -67,10 +122,42 @@ watch([messages, isThinking], async () => {
         />
         <span class="font-bold tracking-wide text-sm">VAI</span>
         <span class="text-zinc-600 text-xs hidden sm:block">AI VTuber</span>
+
+        <!-- Restream chat button (visible when connected or has messages) -->
+        <button
+          v-if="restreamConnected || restreamMessages.length > 0"
+          class="relative w-7 h-7 flex items-center justify-center rounded-lg transition-colors text-sm"
+          :class="showRestream
+            ? 'bg-rose-800/60 text-rose-300'
+            : 'text-rose-400 hover:bg-zinc-800'"
+          title="Restream Chat"
+          @click="showRestream = !showRestream"
+        >
+          💬
+          <span
+            v-if="unreadRestream > 0 && !showRestream"
+            class="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none"
+          >{{ unreadRestream > 9 ? '9+' : unreadRestream }}</span>
+        </button>
       </div>
 
-      <!-- Right: speaking + mute + backend -->
+      <!-- Right: speaking + expression + status dots + mute + backend + settings -->
       <div class="flex items-center gap-3">
+
+        <!-- Gemini rate stats -->
+        <transition name="fade">
+          <div
+            v-if="geminiStats && status?.backend === 'gemini'"
+            class="hidden sm:flex items-center gap-2 text-[10px] font-mono text-zinc-500 select-none"
+            title="Gemini usage — RPM / TPM / RPD (last 60s / last 24h)"
+          >
+            <span :class="geminiStats.rpm >= 8 ? 'text-amber-400' : ''">{{ geminiStats.rpm }}rpm</span>
+            <span class="text-zinc-700">·</span>
+            <span :class="geminiStats.tpm >= 200000 ? 'text-amber-400' : ''">{{ (geminiStats.tpm / 1000).toFixed(1) }}k tpm</span>
+            <span class="text-zinc-700">·</span>
+            <span :class="geminiStats.rpd >= 450 ? 'text-amber-400' : ''">{{ geminiStats.rpd }}rpd</span>
+          </div>
+        </transition>
 
         <!-- AI speaking waveform -->
         <transition name="fade">
@@ -90,6 +177,32 @@ watch([messages, isThinking], async () => {
           </div>
         </transition>
 
+        <!-- Expression badge (shown when VTS connected or expression not neutral) -->
+        <transition name="fade">
+          <div
+            v-if="vtsConnected || currentExpression !== 'neutral'"
+            class="flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium transition-all duration-300"
+            :class="expressionMeta.color"
+          >
+            <span>{{ expressionMeta.icon }}</span>
+            <span class="hidden sm:inline">{{ expressionMeta.label }}</span>
+          </div>
+        </transition>
+
+        <!-- VTS / Restream status dots -->
+        <div class="flex items-center gap-1">
+          <span
+            :title="vtsConnected ? 'VTube Studio connected' : 'VTube Studio disconnected'"
+            class="w-1.5 h-1.5 rounded-full transition-colors"
+            :class="vtsConnected ? 'bg-purple-400' : 'bg-zinc-700'"
+          />
+          <span
+            :title="restreamConnected ? 'Restream connected' : 'Restream disconnected'"
+            class="w-1.5 h-1.5 rounded-full transition-colors"
+            :class="restreamConnected ? 'bg-rose-400' : 'bg-zinc-700'"
+          />
+        </div>
+
         <!-- Audio mute toggle -->
         <button
           v-if="status"
@@ -104,6 +217,16 @@ watch([messages, isThinking], async () => {
         </button>
 
         <BackendSwitcher :status :is-connected="isConnected" @switch="switchBackend" />
+
+        <!-- Settings gear -->
+        <button
+          class="w-7 h-7 flex items-center justify-center rounded-lg transition-colors text-sm"
+          :class="showSettings
+            ? 'bg-zinc-700 text-zinc-200'
+            : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800'"
+          title="Settings"
+          @click="showSettings = !showSettings"
+        >⚙️</button>
       </div>
     </header>
 
@@ -234,6 +357,42 @@ watch([messages, isThinking], async () => {
       </p>
     </footer>
 
+    <!-- ─── Restream Chat Panel ─── -->
+    <transition name="slide-left">
+      <RestreamChat
+        v-if="showRestream"
+        :messages="restreamMessages"
+        :is-connected="restreamConnected"
+        :restream-to-llm="status?.restream_to_llm ?? false"
+        :owner-names="status?.restream_owner_names ?? ''"
+        @close="showRestream = false"
+        @set-restream-to-llm="setRestreamToLlm"
+      />
+    </transition>
+
+    <!-- ─── Settings Panel ─── -->
+    <transition name="slide-right">
+      <SettingsPanel
+        v-if="showSettings"
+        :status
+        :is-connected="isConnected"
+        :vts-connected="vtsConnected"
+        :vts-status-message="vtsStatusMessage"
+        :restream-connected="restreamConnected"
+        :restream-status-message="restreamStatusMessage"
+        :selected-mic-id="selectedMicId"
+        @change-model="changeModel"
+        @set-t-t-s="setTTS"
+        @set-audio-output="setAudioOutput"
+        @connect-v-t-s="connectVTS"
+        @disconnect-v-t-s="disconnectVTS"
+        @connect-restream="connectRestream"
+        @disconnect-restream="disconnectRestream"
+        @set-mic-device="setMicDevice"
+        @close="showSettings = false"
+      />
+    </transition>
+
   </div>
 </template>
 
@@ -248,4 +407,10 @@ watch([messages, isThinking], async () => {
 
 .slide-up-enter-active, .slide-up-leave-active { transition: all 0.2s ease; }
 .slide-up-enter-from, .slide-up-leave-to       { opacity: 0; transform: translateY(6px); }
+
+.slide-right-enter-active, .slide-right-leave-active { transition: transform 0.25s ease, opacity 0.25s ease; }
+.slide-right-enter-from, .slide-right-leave-to       { transform: translateX(100%); opacity: 0; }
+
+.slide-left-enter-active, .slide-left-leave-active { transition: transform 0.25s ease, opacity 0.25s ease; }
+.slide-left-enter-from, .slide-left-leave-to       { transform: translateX(-100%); opacity: 0; }
 </style>

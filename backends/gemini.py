@@ -30,6 +30,7 @@ class GeminiBackend(LLMBackend):
     def __init__(self, api_key: str, model: str) -> None:
         self._api_key = api_key
         self._model = model or "gemini-2.5-flash"
+        self._client = genai.Client(api_key=api_key) if api_key else None
 
     @property
     def name(self) -> str:
@@ -39,10 +40,10 @@ class GeminiBackend(LLMBackend):
         return bool(self._api_key)
 
     def chat(self, messages: list[dict[str, str]]) -> LLMResponse:
-        if not self._api_key:
+        if not self._api_key or self._client is None:
             raise RuntimeError("GOOGLE_AISTUDIO_API_KEY is not set")
 
-        client = genai.Client(api_key=self._api_key)
+        client = self._client
         parts: list[str] = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -63,7 +64,15 @@ class GeminiBackend(LLMBackend):
             try:
                 response = client.models.generate_content(model=self._model, contents=prompt)
                 text = (response.text or "").strip()
-                return LLMResponse(text=text, expression=_sentiment(text))
+                usage = response.usage_metadata
+                input_tok = getattr(usage, "prompt_token_count", 0) or 0
+                output_tok = getattr(usage, "candidates_token_count", 0) or 0
+                return LLMResponse(
+                    text=text,
+                    expression=_sentiment(text),
+                    input_tokens=input_tok,
+                    output_tokens=output_tok,
+                )
             except Exception as exc:
                 s = str(exc)
                 is_rate = "429" in s or "RESOURCE_EXHAUSTED" in s

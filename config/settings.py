@@ -42,6 +42,7 @@ class AppConfig:
     restream_client_id: str
     restream_client_secret: str
     restream_redirect_uri: str
+    restream_owner_names: str  # comma-separated display names (case-insensitive)
     voice_input_sample_rate: int
     voice_input_channels: int
     voice_input_duration_seconds: float
@@ -95,7 +96,8 @@ def load_settings() -> AppConfig:
         temperature=float(_get_env("LM_STUDIO_TEMPERATURE", "0.7")),
         restream_client_id=_get_env("RESTREAM_CLIENT_ID", ""),
         restream_client_secret=_get_env("RESTREAM_CLIENT_SECRET", ""),
-        restream_redirect_uri=_get_env("RESTREAM_REDIRECT_URI", "http://localhost:8080/callback"),
+        restream_redirect_uri=_get_env("RESTREAM_REDIRECT_URI", "http://localhost:8000/api/restream/callback"),
+        restream_owner_names=_get_env("RESTREAM_OWNER_NAMES", ""),
         voice_input_sample_rate=int(_get_env("VOICE_INPUT_SAMPLE_RATE", "16000")),
         voice_input_channels=int(_get_env("VOICE_INPUT_CHANNELS", "1")),
         voice_input_duration_seconds=float(_get_env("VOICE_INPUT_DURATION_SECONDS", "5")),

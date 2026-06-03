@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import asyncio
+import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -52,6 +53,8 @@ class VTuberPipeline:
         self.history: list[dict[str, str]] = load_history(config.history_file)
         self.current_speaker: SpeakerName = config.tts_default_speaker  # type: ignore[assignment]
         self.current_pitch: float = config.tts_default_pitch_semitones
+        self.current_expression: str = "neutral"
+        self._cached_audio_device: int | None = config.audio_output_device
 
     def process_turn(
         self,
@@ -71,6 +74,9 @@ class VTuberPipeline:
             response = backend.chat(messages)
             assistant_text = response.text
             expression = response.expression
+            if backend.name == "gemini":
+                from utils.gemini_stats import record as _record_gemini
+                _record_gemini(response.input_tokens, response.output_tokens)
         except Exception as exc:
             logger.error(f"LLM error ({self.config.preferred_backend}): {exc}")
             if cb.on_error:
@@ -87,22 +93,23 @@ class VTuberPipeline:
         self.history = self.history[-self.config.max_history_messages :]
         save_history(self.history, self.config.history_file)
 
+        # Strip any (expression) tags the LLM may have embedded in the text
+        tts_text = re.sub(r'\([^)]*\)\s*', '', assistant_text).strip()
+
         # TTS
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         tts_path = (
             self.config.tts_output_dir / f"reply_{timestamp}.{self.config.tts_output_format}"
         )
         try:
-            asyncio.run(
-                synthesize_speech(
-                    text=assistant_text,
-                    output_path=tts_path,
-                    voice=self.config.tts_voice,
-                    rate=self.config.tts_rate,
-                    volume=self.config.tts_volume,
-                    speaker=self.current_speaker,
-                    pitch_semitones=self.current_pitch,
-                )
+            tts_path = synthesize_speech(
+                text=tts_text,
+                output_path=tts_path,
+                voice=self.config.tts_voice,
+                rate=self.config.tts_rate,
+                volume=self.config.tts_volume,
+                speaker=self.current_speaker,
+                pitch_semitones=self.current_pitch,
             )
         except Exception as exc:
             logger.error(f"TTS error: {exc}")
@@ -115,22 +122,27 @@ class VTuberPipeline:
         # RVC voice conversion (falls back to original TTS if Applio unavailable)
         rvc_ready_path = process_with_rvc(tts_path, self.config)
 
-        # Audio playback + expression trigger
+        # Always track expression for the UI badge, regardless of audio/VTS state
+        effective_expression = expression or "smile_happy"
+        self.current_expression = effective_expression
+
+        # Audio playback + VTS expression trigger
         if self.config.audio_play_output:
-            device_id = self.config.audio_output_device or find_vb_audio_device()
+            if self._cached_audio_device is None:
+                self._cached_audio_device = find_vb_audio_device()
+            device_id = self._cached_audio_device
             if device_id is not None:
-                write_subtitle(assistant_text)
+                write_subtitle(tts_text)
                 vtuber_ctrl = get_vtuber_controller()
-                if vtuber_ctrl and expression:
-                    trigger_expression(expression, controller=vtuber_ctrl)
-                elif vtuber_ctrl:
-                    trigger_expression("smile_happy", controller=vtuber_ctrl)
+                if vtuber_ctrl:
+                    trigger_expression(effective_expression, controller=vtuber_ctrl)
                 if cb.on_audio_start:
                     cb.on_audio_start()
                 play_audio(rvc_ready_path, device_id=device_id, blocking=True)
                 if cb.on_audio_end:
                     cb.on_audio_end()
                 schedule_expression_clear(delay=2.0)
+                threading.Timer(2.0, lambda: setattr(self, "current_expression", "neutral")).start()
                 schedule_subtitle_clear(delay=5.0)
             else:
                 logger.warning("Audio playback enabled but no output device found")
@@ -142,6 +154,7 @@ class VTuberPipeline:
         logger.info(f"Turn time: {elapsed:.3f}s ({backend.name})")
 
         if cb.on_response:
-            cb.on_response(user_text, assistant_text, elapsed)
+            # Pass clean text (no expression tags) to display — history keeps the original
+            cb.on_response(user_text, tts_text, elapsed)
 
-        return assistant_text
+        return tts_text
