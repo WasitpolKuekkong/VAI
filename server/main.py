@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,8 +40,29 @@ async def lifespan(app: FastAPI):
         f"VAI server ready | backend={config.preferred_backend} | "
         f"history={len(state.pipeline.history)} messages"
     )
+
+    # Discord bot (optional — only starts when DISCORD_BOT_TOKEN is set)
+    from utils.discord_bot import create_bot, start_bot
+    import os
+    discord_token = os.getenv("DISCORD_BOT_TOKEN", "")
+    chat_channel_raw = os.getenv("DISCORD_CHAT_CHANNEL_ID", "")
+    chat_channel_id = int(chat_channel_raw) if chat_channel_raw.isdigit() else None
+    discord_bot = create_bot(
+        pipeline=state.pipeline,
+        token=discord_token,
+        chat_channel_id=chat_channel_id,
+        owner_name="EiX2",
+        language="th",
+    )
+    if discord_bot:
+        state.discord_task = asyncio.create_task(start_bot(discord_bot, discord_token))
+        logger.info("Discord bot starting...")
+
     yield
+
     logger.info("VAI server shutting down")
+    if state.discord_task and not state.discord_task.done():
+        state.discord_task.cancel()
 
 
 app = FastAPI(title="VAI API", version="0.1.0", lifespan=lifespan)

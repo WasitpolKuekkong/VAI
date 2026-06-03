@@ -19,6 +19,9 @@ active_ws: set["WebSocket"] = set()
 restream_task: Optional[asyncio.Task] = None
 restream_access_token: Optional[str] = None
 
+# Discord
+discord_task: Optional[asyncio.Task] = None
+
 # Restream → LLM forwarding
 restream_to_llm: bool = False
 # Tracks owner tasks queued/running — viewers skip when this > 0
