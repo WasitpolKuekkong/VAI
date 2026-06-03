@@ -5,26 +5,8 @@ import time
 
 from google import genai
 
-from backends.base import LLMBackend, LLMResponse
+from backends.base import LLMBackend, LLMResponse, parse_llm_json
 from utils.logger import logger
-
-_ANGRY = ["โกรธ", "แย่", "ไม่ดี", "หัวเสีย", "ตรวจสอบ", "ปัญหา"]
-_HAPPY = ["ดี", "ยิ้ม", "มีความสุข", "เยี่ยม", "ยอ", "ดีใจ"]
-_SAD = ["เศร้า", "ทุกข์", "เสียใจ", "ผิดหวัง", "น่าเสียดาย"]
-
-
-def _sentiment(text: str) -> str | None:
-    t = text.lower()
-    a = sum(1 for w in _ANGRY if w in t)
-    h = sum(1 for w in _HAPPY if w in t)
-    s = sum(1 for w in _SAD if w in t)
-    if a and a >= h and a >= s:
-        return "angry"
-    if s and s >= h:
-        return "sad"
-    if h:
-        return "smile_happy"
-    return None
 
 
 class GeminiBackend(LLMBackend):
@@ -63,16 +45,12 @@ class GeminiBackend(LLMBackend):
         for attempt in range(1, 4):
             try:
                 response = client.models.generate_content(model=self._model, contents=prompt)
-                text = (response.text or "").strip()
+                raw = (response.text or "").strip()
                 usage = response.usage_metadata
-                input_tok = getattr(usage, "prompt_token_count", 0) or 0
-                output_tok = getattr(usage, "candidates_token_count", 0) or 0
-                return LLMResponse(
-                    text=text,
-                    expression=_sentiment(text),
-                    input_tokens=input_tok,
-                    output_tokens=output_tok,
-                )
+                result = parse_llm_json(raw)
+                result.input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                result.output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+                return result
             except Exception as exc:
                 s = str(exc)
                 is_rate = "429" in s or "RESOURCE_EXHAUSTED" in s

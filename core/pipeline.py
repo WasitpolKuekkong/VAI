@@ -85,8 +85,6 @@ class VTuberPipeline:
                         raise primary_exc
                 else:
                     raise primary_exc
-            assistant_text = response.text
-            expression = response.expression
             if backend.name == "gemini":
                 from utils.gemini_stats import record as _record_gemini
                 _record_gemini(response.input_tokens, response.output_tokens)
@@ -95,6 +93,14 @@ class VTuberPipeline:
             if cb.on_error:
                 cb.on_error(exc)
             return ""
+
+        if response.action == "skip":
+            logger.info("VAI decided to skip this turn")
+            write_subtitle("")
+            return ""
+
+        assistant_text = response.text
+        expression = response.expression
 
         if not assistant_text:
             logger.warning("Backend returned empty response")
@@ -138,6 +144,8 @@ class VTuberPipeline:
         # Always track expression for the UI badge, regardless of audio/VTS state
         effective_expression = expression or "smile_happy"
         self.current_expression = effective_expression
+        if response.motion:
+            logger.info(f"Motion: {response.motion}")
 
         # Audio playback + VTS expression trigger
         if self.config.audio_play_output:
