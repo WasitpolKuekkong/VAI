@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import requests
 
-from backends.base import LLMBackend, LLMResponse
+from backends.base import LLMBackend, LLMResponse, parse_llm_json
 
 
 class LMStudioBackend(LLMBackend):
@@ -42,5 +42,5 @@ class LMStudioBackend(LLMBackend):
         }
         response = requests.post(url, json=payload, timeout=self._timeout)
         response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"].strip()
-        return LLMResponse(text=text)
+        raw = response.json()["choices"][0]["message"]["content"].strip()
+        return parse_llm_json(raw)
