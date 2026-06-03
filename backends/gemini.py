@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 from google import genai
@@ -58,9 +59,8 @@ class GeminiBackend(LLMBackend):
                 parts.append(f"{role.title()}: {content}")
 
         prompt = "\n".join(parts) if parts else "สวัสดี"
-        delay = 10
 
-        for attempt in range(1, 5):
+        for attempt in range(1, 4):
             try:
                 response = client.models.generate_content(model=self._model, contents=prompt)
                 text = (response.text or "").strip()
@@ -77,11 +77,19 @@ class GeminiBackend(LLMBackend):
                 s = str(exc)
                 is_rate = "429" in s or "RESOURCE_EXHAUSTED" in s
                 is_busy = "503" in s or "UNAVAILABLE" in s
-                if (is_rate or is_busy) and attempt < 4:
+
+                # Daily quota exhausted — retrying won't help, fail fast
+                if is_rate and "PerDay" in s:
+                    logger.error("🚫 Gemini daily quota exhausted, falling back immediately")
+                    raise
+
+                if (is_rate or is_busy) and attempt < 3:
+                    # Parse suggested retry delay from error, cap at 15s
+                    m = re.search(r'retry[^\d]*(\d+(?:\.\d+)?)s', s, re.IGNORECASE)
+                    delay = min(float(m.group(1)) if m else 10.0, 15.0)
                     label = "rate-limited (429)" if is_rate else "busy (503)"
-                    logger.warning(f"🔄 Gemini {label}, retrying in {delay}s... ({attempt}/4)")
+                    logger.warning(f"🔄 Gemini {label}, retrying in {delay:.0f}s... ({attempt}/3)")
                     time.sleep(delay)
-                    delay *= 2
                     continue
                 raise
 

@@ -72,27 +72,20 @@ watch([messages, isThinking], async () => {
 
 // ── Gemini stats ─────────────────────────────────────────────────────────────
 const geminiStats = ref<{ rpm: number; tpm: number; rpd: number } | null>(null)
+const { public: { apiBase } } = useRuntimeConfig()
 
 const fetchGeminiStats = async () => {
   if (status.value?.backend !== 'gemini') return
   try {
-    const data = await $fetch<{ rpm: number; tpm: number; rpd: number }>('/api/gemini-stats')
+    const data = await $fetch<{ rpm: number; tpm: number; rpd: number }>(`${apiBase}/api/gemini-stats`)
     geminiStats.value = data
   } catch {}
 }
 
-let statsTimer: ReturnType<typeof setInterval> | null = null
 watch(() => status.value?.backend, (backend) => {
-  if (statsTimer) clearInterval(statsTimer)
-  if (backend === 'gemini') {
-    fetchGeminiStats()
-    statsTimer = setInterval(fetchGeminiStats, 5000)
-  } else {
-    geminiStats.value = null
-  }
+  if (backend === 'gemini') fetchGeminiStats()
+  else geminiStats.value = null
 }, { immediate: true })
-
-onUnmounted(() => { if (statsTimer) clearInterval(statsTimer) })
 
 // ── Expression badge ──────────────────────────────────────────────────────────
 const EXPRESSION_META: Record<string, { label: string; color: string; icon: string }> = {
@@ -147,15 +140,21 @@ const expressionMeta = computed(() => {
         <!-- Gemini rate stats -->
         <transition name="fade">
           <div
-            v-if="geminiStats && status?.backend === 'gemini'"
+            v-if="status?.backend === 'gemini'"
             class="hidden sm:flex items-center gap-2 text-[10px] font-mono text-zinc-500 select-none"
-            title="Gemini usage — RPM / TPM / RPD (last 60s / last 24h)"
           >
-            <span :class="geminiStats.rpm >= 8 ? 'text-amber-400' : ''">{{ geminiStats.rpm }}rpm</span>
-            <span class="text-zinc-700">·</span>
-            <span :class="geminiStats.tpm >= 200000 ? 'text-amber-400' : ''">{{ (geminiStats.tpm / 1000).toFixed(1) }}k tpm</span>
-            <span class="text-zinc-700">·</span>
-            <span :class="geminiStats.rpd >= 450 ? 'text-amber-400' : ''">{{ geminiStats.rpd }}rpd</span>
+            <template v-if="geminiStats">
+              <span :class="geminiStats.rpm >= 8 ? 'text-amber-400' : ''" title="Requests/min (limit 15)">{{ geminiStats.rpm }}rpm</span>
+              <span class="text-zinc-700">·</span>
+              <span :class="geminiStats.tpm >= 200000 ? 'text-amber-400' : ''" title="Tokens/min (limit 1M)">{{ (geminiStats.tpm / 1000).toFixed(1) }}k tpm</span>
+              <span class="text-zinc-700">·</span>
+              <span :class="geminiStats.rpd >= 18 ? 'text-red-400' : geminiStats.rpd >= 15 ? 'text-amber-400' : ''" title="Requests/day (free limit ~1500)">{{ geminiStats.rpd }}rpd</span>
+            </template>
+            <button
+              class="text-zinc-600 hover:text-zinc-300 transition-colors px-0.5"
+              title="Refresh Gemini stats"
+              @click="fetchGeminiStats"
+            >↻</button>
           </div>
         </transition>
 
@@ -282,6 +281,12 @@ const expressionMeta = computed(() => {
 
     <!-- ─── Input Bar ─── -->
     <footer class="px-3 py-2.5 bg-zinc-900 border-t border-zinc-800 flex-shrink-0">
+      <!-- Owner label -->
+      <div class="flex items-center gap-1.5 mb-1.5 px-1 select-none">
+        <span class="text-amber-400 text-xs">👑</span>
+        <span class="text-amber-400 text-xs font-semibold tracking-wide">EiX2</span>
+        <span class="text-zinc-700 text-xs">· owner channel</span>
+      </div>
       <div class="flex items-end gap-2">
 
         <!-- Voice zone (mic + level meter) -->

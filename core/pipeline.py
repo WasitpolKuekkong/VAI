@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from backends.factory import get_backend
+from backends.factory import get_backend, get_quota_fallback
 from config.settings import AppConfig, load_personality
 from core.capability_registry import CapabilityRegistry
 from core.prompt_builder import build_system_prompt
@@ -71,7 +71,20 @@ class VTuberPipeline:
         try:
             messages = build_messages(self.system_prompt, self.history, user_text)
             backend = get_backend(self.config)
-            response = backend.chat(messages)
+            try:
+                response = backend.chat(messages)
+            except Exception as primary_exc:
+                s = str(primary_exc)
+                is_quota = ("RESOURCE_EXHAUSTED" in s or "429" in s) and "PerDay" in s
+                if is_quota:
+                    fallback = get_quota_fallback(self.config, backend.name)
+                    if fallback:
+                        response = fallback.chat(messages)
+                        backend = fallback
+                    else:
+                        raise primary_exc
+                else:
+                    raise primary_exc
             assistant_text = response.text
             expression = response.expression
             if backend.name == "gemini":

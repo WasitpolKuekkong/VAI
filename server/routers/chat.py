@@ -107,57 +107,66 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
 
 async def _handle_chat(websocket: WebSocket, user_text: str) -> None:
+    import server.state as state
     from server.state import pipeline, processing_lock
 
     if pipeline is None:
         return
 
-    async with processing_lock:
-        await websocket.send_json({"type": "thinking"})
+    # Web chat is always the owner (EiX2) — prefix so AI knows who's talking
+    owner_name = "EiX2"
+    labelled_text = f"[{owner_name}]: {user_text}"
 
-        result: dict[str, Any] = {"text": "", "elapsed": 0.0, "error": None}
-        loop = asyncio.get_running_loop()
+    state.pending_owner_tasks += 1
+    try:
+        async with processing_lock:
+            await websocket.send_json({"type": "thinking"})
 
-        def on_response(_: str, assistant: str, elapsed: float) -> None:
-            result["text"] = assistant
-            result["elapsed"] = elapsed
+            result: dict[str, Any] = {"text": "", "elapsed": 0.0, "error": None}
+            loop = asyncio.get_running_loop()
 
-        def on_error(exc: Exception) -> None:
-            result["error"] = str(exc)
+            def on_response(_: str, assistant: str, elapsed: float) -> None:
+                result["text"] = assistant
+                result["elapsed"] = elapsed
 
-        def on_audio_start() -> None:
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json({"type": "speaking", "state": "start"}),
-                loop,
+            def on_error(exc: Exception) -> None:
+                result["error"] = str(exc)
+
+            def on_audio_start() -> None:
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json({"type": "speaking", "state": "start"}),
+                    loop,
+                )
+
+            def on_audio_end() -> None:
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json({"type": "speaking", "state": "end"}),
+                    loop,
+                )
+
+            await asyncio.to_thread(
+                pipeline.process_turn,
+                labelled_text,
+                TurnCallbacks(
+                    on_response=on_response,
+                    on_error=on_error,
+                    on_audio_start=on_audio_start,
+                    on_audio_end=on_audio_end,
+                ),
             )
 
-        def on_audio_end() -> None:
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json({"type": "speaking", "state": "end"}),
-                loop,
-            )
-
-        await asyncio.to_thread(
-            pipeline.process_turn,
-            user_text,
-            TurnCallbacks(
-                on_response=on_response,
-                on_error=on_error,
-                on_audio_start=on_audio_start,
-                on_audio_end=on_audio_end,
-            ),
-        )
-
-        if result["error"]:
-            await websocket.send_json({"type": "error", "message": result["error"]})
-        else:
-            await websocket.send_json({
-                "type": "response",
-                "text": result["text"],
-                "elapsed": round(result["elapsed"], 2),
-                "expression": pipeline.current_expression,
-            })
-            await _send_status(websocket, pipeline)
+            if result["error"]:
+                await websocket.send_json({"type": "error", "message": result["error"]})
+            else:
+                await websocket.send_json({
+                    "type": "response",
+                    "text": result["text"],
+                    "elapsed": round(result["elapsed"], 2),
+                    "expression": pipeline.current_expression,
+                })
+                await _send_status(websocket, pipeline)
+    finally:
+        state.pending_owner_tasks = max(0, state.pending_owner_tasks - 1)
 
 
 async def _handle_connect_vts(websocket: WebSocket, pipeline: Any) -> None:
