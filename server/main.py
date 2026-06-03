@@ -16,7 +16,7 @@ from core.pipeline import VTuberPipeline
 from main import ensure_output_dirs
 from rvc.applio_stub import prime_applio_worker
 from utils.logger import logger
-from utils.vtuber_controller import initialize_vtuber_controller, _run_in_loop
+from utils.vtuber_controller import initialize_vtuber_controller_sync
 
 import server.state as state
 from server.routers.chat import router as chat_router
@@ -30,8 +30,11 @@ async def lifespan(app: FastAPI):
     prime_applio_worker(config)
 
     try:
-        _run_in_loop(initialize_vtuber_controller())
-        logger.info("VTuber controller connected")
+        ctrl = await asyncio.to_thread(initialize_vtuber_controller_sync)
+        if ctrl:
+            logger.info("VTuber controller connected")
+        else:
+            logger.warning("VTuber Studio not available (non-fatal)")
     except Exception as exc:
         logger.warning(f"VTuber init failed (non-fatal): {exc}")
 

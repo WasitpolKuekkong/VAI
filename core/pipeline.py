@@ -24,6 +24,7 @@ from utils.vtuber_controller import get_vtuber_controller, trigger_expression
 @dataclass
 class TurnCallbacks:
     on_response: Callable[[str, str, float], None] | None = None
+    on_text_ready: Callable[[str], None] | None = None   # fires after LLM, before TTS
     on_error: Callable[[Exception], None] | None = None
     on_audio_start: Callable[[], None] | None = None
     on_audio_end: Callable[[], None] | None = None
@@ -114,6 +115,9 @@ class VTuberPipeline:
 
         # Strip any (expression) tags the LLM may have embedded in the text
         tts_text = re.sub(r'\([^)]*\)\s*', '', assistant_text).strip()
+
+        if cb.on_text_ready:
+            cb.on_text_ready(tts_text)
 
         # TTS
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

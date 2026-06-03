@@ -78,7 +78,6 @@ if _DISCORD_AVAILABLE:
         # ── Lifecycle ─────────────────────────────────────────────────────────
 
         async def on_ready(self) -> None:
-            await self.tree.sync()
             logger.info(f"Discord bot ready as {self.user}")
 
         # ── Text events ───────────────────────────────────────────────────────
@@ -86,12 +85,15 @@ if _DISCORD_AVAILABLE:
         async def on_message(self, message: discord.Message) -> None:
             if message.author.bot:
                 return
-            await self.process_commands(message)
+            # Commands (!join, !leave, !listen, etc.) — don't pass to LLM
+            if message.content.startswith(self.command_prefix):
+                await self.process_commands(message)
+                return
 
             is_tagged = self.user in message.mentions
             is_chat_channel = (
-                self.chat_channel_id is not None
-                and message.channel.id == self.chat_channel_id
+                self.chat_channel_id is None  # no filter = all channels
+                or message.channel.id == self.chat_channel_id
             )
             if not (is_tagged or is_chat_channel):
                 return
@@ -103,72 +105,115 @@ if _DISCORD_AVAILABLE:
             display = message.author.display_name
             is_owner = display.lower() == self.owner_name.lower()
             prefix = f"[{self.owner_name}]" if is_owner else f"[Discord | {display}]"
-            labelled = f"{prefix}: {text}"
+            tag_marker = "[TAGGED] " if is_tagged else ""
+            labelled = f"{tag_marker}{prefix}: {text}"
 
             async with message.channel.typing():
-                reply = await self._run_pipeline(labelled)
-            if reply:
-                await message.reply(reply, mention_author=False)
+                await self._run_pipeline(labelled, reply_target=message)
 
-        # ── Slash commands ────────────────────────────────────────────────────
+        async def _cmd_cls(self, ctx: commands.Context) -> None:
+            try:
+                deleted = await ctx.channel.purge(limit=100)
+                confirm = await ctx.send(f"🧹 ลบ {len(deleted)} ข้อความแล้ว")
+                await asyncio.sleep(3)
+                await confirm.delete()
+            except discord.Forbidden:
+                await ctx.send("❌ บอทไม่มีสิทธิ์ลบข้อความ (ต้องการ Manage Messages)", delete_after=5)
+            except Exception as exc:
+                logger.error(f"Discord !cls error: {exc}")
+
+        # ── Auto-leave when channel is empty ─────────────────────────────────────
+
+        async def on_voice_state_update(
+            self,
+            member: discord.Member,
+            before: discord.VoiceState,
+            after: discord.VoiceState,
+        ) -> None:
+            if member.bot:
+                return
+            vc: discord.VoiceClient | None = member.guild.voice_client
+            if not vc or not vc.channel:
+                return
+            # fire เฉพาะตอน human ออกจาก channel ที่บอทอยู่
+            if before.channel != vc.channel:
+                return
+            # รอ 1 วิให้ member list อัปเดตก่อนเช็ค
+            await asyncio.sleep(1)
+            vc = member.guild.voice_client
+            if not vc or not vc.channel:
+                return
+            humans = [m for m in vc.channel.members if not m.bot]
+            if not humans:
+                guild_id = member.guild.id
+                self._listen_mode[guild_id] = False
+                if vc.recording:
+                    vc.stop_recording()
+                await vc.disconnect(force=True)
+                logger.info("Discord: ออกจาก VC เพราะไม่มีคนแล้ว")
+
+        # ── Prefix commands (!join !leave !listen) ───────────────────────────────
 
         def _register_commands(self) -> None:
-            @self.tree.command(name="join", description="VAI เข้า voice channel ของคุณ")
-            async def join(interaction: discord.Interaction) -> None:
-                await self._cmd_join(interaction)
+            @self.command(name="join")
+            async def cmd_join(ctx: commands.Context) -> None:
+                await self._cmd_join(ctx)
 
-            @self.tree.command(name="leave", description="VAI ออกจาก voice channel")
-            async def leave(interaction: discord.Interaction) -> None:
-                await self._cmd_leave(interaction)
+            @self.command(name="leave")
+            async def cmd_leave(ctx: commands.Context) -> None:
+                await self._cmd_leave(ctx)
 
-            @self.tree.command(name="listen", description="เปิด/ปิด Voice Activation (VAD)")
-            async def listen(interaction: discord.Interaction) -> None:
-                await self._cmd_listen(interaction)
+            @self.command(name="listen")
+            async def cmd_listen(ctx: commands.Context) -> None:
+                await self._cmd_listen(ctx)
 
-        async def _cmd_join(self, interaction: discord.Interaction) -> None:
-            if not interaction.user.voice or not interaction.user.voice.channel:
-                await interaction.response.send_message("คุณยังไม่ได้อยู่ใน voice channel ครับ", ephemeral=True)
+            @self.command(name="cls")
+            async def cmd_cls(ctx: commands.Context) -> None:
+                await self._cmd_cls(ctx)
+
+        async def _cmd_join(self, ctx: commands.Context) -> None:
+            if not ctx.author.voice or not ctx.author.voice.channel:
+                await ctx.send("คุณยังไม่ได้อยู่ใน voice channel ครับ")
                 return
-            vc = interaction.user.voice.channel
-            if interaction.guild.voice_client:
-                await interaction.guild.voice_client.move_to(vc)
+            vc = ctx.author.voice.channel
+            if ctx.guild.voice_client:
+                await ctx.guild.voice_client.move_to(vc)
             else:
                 await vc.connect()
-            await interaction.response.send_message(f"เข้า **{vc.name}** แล้วครับ 🎙️")
+            await ctx.send(f"เข้า **{vc.name}** แล้วครับ 🎙️")
 
-        async def _cmd_leave(self, interaction: discord.Interaction) -> None:
-            if not interaction.guild.voice_client:
-                await interaction.response.send_message("ไม่ได้อยู่ใน VC ครับ", ephemeral=True)
+        async def _cmd_leave(self, ctx: commands.Context) -> None:
+            if not ctx.guild.voice_client:
+                await ctx.send("ไม่ได้อยู่ใน VC ครับ")
                 return
-            guild_id = interaction.guild.id
+            guild_id = ctx.guild.id
             self._listen_mode[guild_id] = False
-            vc: discord.VoiceClient = interaction.guild.voice_client
+            vc: discord.VoiceClient = ctx.guild.voice_client
             if vc.recording:
                 vc.stop_recording()
-            await vc.disconnect()
-            await interaction.response.send_message("ออกจาก voice channel แล้วครับ")
+            await vc.disconnect(force=True)
+            await ctx.send("ออกจาก voice channel แล้วครับ")
 
-        async def _cmd_listen(self, interaction: discord.Interaction) -> None:
-            guild_id = interaction.guild.id
-            vc: discord.VoiceClient | None = interaction.guild.voice_client
+        async def _cmd_listen(self, ctx: commands.Context) -> None:
+            guild_id = ctx.guild.id
+            vc: discord.VoiceClient | None = ctx.guild.voice_client
 
             if not vc:
-                await interaction.response.send_message("ใช้ `/join` ก่อนนะครับ", ephemeral=True)
+                await ctx.send("ใช้ `!join` ก่อนนะครับ")
                 return
 
             current = self._listen_mode.get(guild_id, False)
             self._listen_mode[guild_id] = not current
 
             if self._listen_mode[guild_id]:
-                # Start recording
                 sink = _VAISink(self)
                 self._sink[guild_id] = sink
-                vc.start_recording(sink, self._on_recording_done, interaction.channel)
-                await interaction.response.send_message("🎤 Voice Activation เปิดแล้ว — พูดได้เลยครับ")
+                vc.start_recording(sink, self._on_recording_done, ctx.channel)
+                await ctx.send("🎤 Voice Activation เปิดแล้ว — พูดได้เลยครับ")
             else:
                 if vc.recording:
                     vc.stop_recording()
-                await interaction.response.send_message("🔇 Voice Activation ปิดแล้ว")
+                await ctx.send("🔇 Voice Activation ปิดแล้ว")
 
         # ── Voice recording callback ───────────────────────────────────────────
 
@@ -207,9 +252,9 @@ if _DISCORD_AVAILABLE:
 
                     logger.info(f"Discord STT [{display}]: {text}")
                     prefix = f"[{self.owner_name}]" if is_owner else f"[Discord | {display}]"
-                    reply = await self._run_pipeline(f"{prefix}: {text}")
+                    await channel.send(f"**{display}**: {text}")
+                    reply = await self._run_pipeline(f"{prefix}: {text}", reply_target=channel)
                     if reply:
-                        await channel.send(f"**{display}**: {text}\n> {reply}")
                         await self._speak(channel, reply)
 
                 except Exception as exc:
@@ -252,9 +297,24 @@ if _DISCORD_AVAILABLE:
 
         # ── Pipeline runner ───────────────────────────────────────────────────
 
-        async def _run_pipeline(self, labelled_text: str) -> str:
+        async def _run_pipeline(
+            self,
+            labelled_text: str,
+            reply_target: discord.Message | discord.TextChannel | None = None,
+        ) -> str:
             async with self._pipeline_lock:
                 result: dict = {"text": "", "error": None}
+                loop = asyncio.get_running_loop()
+
+                def on_text_ready(text: str) -> None:
+                    result["text"] = text
+                    if reply_target and text:
+                        coro = (
+                            reply_target.reply(text, mention_author=False)
+                            if isinstance(reply_target, discord.Message)
+                            else reply_target.send(text)
+                        )
+                        asyncio.run_coroutine_threadsafe(coro, loop)
 
                 def on_response(_: str, assistant: str, elapsed: float) -> None:
                     result["text"] = assistant
@@ -266,7 +326,11 @@ if _DISCORD_AVAILABLE:
                 await asyncio.to_thread(
                     self.pipeline.process_turn,
                     labelled_text,
-                    TurnCallbacks(on_response=on_response, on_error=on_error),
+                    TurnCallbacks(
+                        on_text_ready=on_text_ready,
+                        on_response=on_response,
+                        on_error=on_error,
+                    ),
                 )
                 if result["error"]:
                     logger.error(f"Discord pipeline error: {result['error']}")
